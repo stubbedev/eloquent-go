@@ -1,0 +1,99 @@
+package orm
+
+import (
+	"context"
+	"slices"
+	"sync/atomic"
+)
+
+// Factory builds models for tests and seeders (Eloquent model factories):
+//
+//	var UserFactory = orm.NewFactory(Users.Table, func(n int) User {
+//		return User{Name: fmt.Sprintf("User %d", n), Email: fmt.Sprintf("user%d@example.com", n)}
+//	})
+//
+//	admins, err := UserFactory.Count(3).State(func(u *User) { u.Karma = 100 }).Create(ctx)
+//
+// Factories are immutable; every method returns a modified copy.
+type Factory[M any] struct {
+	table    *Table[M]
+	def      func(n int) M
+	seq      *atomic.Int64
+	count    int
+	states   []func(*M)
+	sequence []func(*M)
+	after    []func(context.Context, *M) error
+}
+
+// NewFactory returns a factory whose definition receives a sequence number
+// that increases across every model the factory makes.
+func NewFactory[M any](t *Table[M], definition func(n int) M) Factory[M] {
+	return Factory[M]{table: t, def: definition, seq: new(atomic.Int64), count: 1}
+}
+
+// Count sets how many models Make and Create produce.
+func (f Factory[M]) Count(n int) Factory[M] { f.count = n; return f }
+
+// State applies modifications to every model.
+func (f Factory[M]) State(fns ...func(*M)) Factory[M] {
+	f.states = append(slices.Clip(f.states), fns...)
+	return f
+}
+
+// Sequence applies the modifications in turn, cycling: the first model gets
+// fns[0], the second fns[1], ...
+func (f Factory[M]) Sequence(fns ...func(*M)) Factory[M] {
+	f.sequence = slices.Clone(fns)
+	return f
+}
+
+// AfterCreating runs fn on each model after it is inserted — e.g. to create
+// related models (has / for).
+func (f Factory[M]) AfterCreating(fn func(ctx context.Context, m *M) error) Factory[M] {
+	f.after = append(slices.Clip(f.after), fn)
+	return f
+}
+
+// Make builds models without saving them.
+func (f Factory[M]) Make() []M {
+	out := make([]M, f.count)
+	for i := range out {
+		out[i] = f.def(int(f.seq.Add(1)))
+		for _, s := range f.states {
+			s(&out[i])
+		}
+		if len(f.sequence) > 0 {
+			f.sequence[i%len(f.sequence)](&out[i])
+		}
+	}
+	return out
+}
+
+// MakeOne builds a single unsaved model.
+func (f Factory[M]) MakeOne() M { return f.Count(1).Make()[0] }
+
+// Create builds and inserts models, firing model events.
+func (f Factory[M]) Create(ctx context.Context) ([]M, error) {
+	models := f.Make()
+	for i := range models {
+		if err := f.table.Create(ctx, &models[i]); err != nil {
+			return models[:i], err
+		}
+		for _, fn := range f.after {
+			if err := fn(ctx, &models[i]); err != nil {
+				return models[:i+1], err
+			}
+		}
+	}
+	return models, nil
+}
+
+// CreateOne builds and inserts a single model.
+func (f Factory[M]) CreateOne(ctx context.Context) (M, error) {
+	ms, err := f.Count(1).Create(ctx)
+	if len(ms) == 0 {
+		var zero M
+		return zero, err
+	}
+	return ms[0], err
+}

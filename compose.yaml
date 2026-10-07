@@ -1,0 +1,58 @@
+# Test databases for the eloquent-go suite. Start them, then run the tests
+# against each engine:
+#
+#   docker compose up -d --wait
+#   make test-all        # sqlite + postgres + mysql + mariadb
+#
+# Each engine gets two empty databases: "eloquent" (default connection) and
+# "eloquent_audit" (the example's second connection).
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: eloquent
+      POSTGRES_PASSWORD: eloquent
+      POSTGRES_DB: eloquent
+    ports: ["127.0.0.1:54329:5432"]
+    volumes:
+      - ./testdata/docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eloquent -d eloquent_audit"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: eloquent
+      MYSQL_USER: eloquent
+      MYSQL_PASSWORD: eloquent
+      MYSQL_DATABASE: eloquent
+    ports: ["127.0.0.1:33069:3306"]
+    volumes:
+      - ./testdata/docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    tmpfs: [/var/lib/mysql]
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -ueloquent -peloquent -h127.0.0.1 -e 'SELECT 1' eloquent_audit"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: eloquent
+      MARIADB_USER: eloquent
+      MARIADB_PASSWORD: eloquent
+      MARIADB_DATABASE: eloquent
+    ports: ["127.0.0.1:33070:3306"]
+    volumes:
+      - ./testdata/docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    tmpfs: [/var/lib/mysql]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
