@@ -4,17 +4,18 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	. "github.com/stubbedev/eloquent-go/example/models"
-	"github.com/stubbedev/eloquent-go/orm"
-	"github.com/stubbedev/eloquent-go/schema"
-
 	_ "github.com/ClickHouse/clickhouse-go/v2"
 	_ "github.com/marcboeker/go-duckdb/v2"
 	_ "modernc.org/sqlite"
+
+	. "github.com/stubbedev/eloquent-go/example/models"
+	"github.com/stubbedev/eloquent-go/orm"
+	"github.com/stubbedev/eloquent-go/schema"
 )
 
 // ---------------------------------------------------------------------------
@@ -178,7 +179,7 @@ func TestDuckDB(t *testing.T) {
 
 	createWidgetTable(ctx, t, "duck")
 	for i := range seedWidgets(t) {
-		var w = seedWidgets(t)[i]
+		w := seedWidgets(t)[i]
 		ok(Widgets.Query().On("duck").Create(ctx, &w))
 	}
 	assertWidgets(t, ctx, "duck")
@@ -242,7 +243,7 @@ func TestMongo(t *testing.T) {
 		t.Skip("set ELOQUENT_TEST_MONGO=mongodb://127.0.0.1:17017 to run")
 	}
 	ctx := context.Background()
-	store, err := orm.OpenMongo("mongo", os.Getenv("ELOQUENT_TEST_MONGO"), "eloquent"+strings.ToLower(fmt.Sprint(time.Now().UnixNano()%100000)))
+	store, err := orm.OpenMongo("mongo", os.Getenv("ELOQUENT_TEST_MONGO"), "eloquent"+strings.ToLower(strconv.FormatInt(time.Now().UnixNano()%100000, 10)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,7 @@ import "strconv"
 // Postgres-flavoured: same INTEGER/BIGINT/VARCHAR/TIMESTAMP vocabulary, but
 // no serial types (auto-increment columns are plain integers app-side or
 // via sequences), a JSON type, and FLOAT[N] arrays for vectors.
-func duckdbType(c *Column, auto bool) string {
+func duckdbType(c *Column) string {
 	n := strconv.Itoa
 	switch c.Type {
 	case TypeString:

@@ -275,7 +275,7 @@ type HasOneRel[M, R any, K comparable] struct {
 }
 
 func HasOne[M, R any, K comparable](related *Table[R], local Column[M, K], foreign Column[R, K], set func(*M, *R)) *HasOneRel[M, R, K] {
-	return &HasOneRel[M, R, K]{hasBase: hasBase[M, R, K]{related: related, local: local, foreign: foreign}, set: set}
+	return &HasOneRel[M, R, K]{related: related, local: local, foreign: foreign, set: set}
 }
 
 func MorphOne[M, R any, K comparable](related *Table[R], local Column[M, K], morphID Column[R, K], morphType Column[R, string], set func(*M, *R)) *HasOneRel[M, R, K] {

@@ -68,7 +68,7 @@ func (s *Builder) GetColumns(ctx context.Context, table string) ([]ColumnInfo, e
 	autoinc := false
 	if g, err := s.kind(ctx); err == nil && g == "sqlite" {
 		var create sql.NullString
-		s.query(ctx, map[string]string{"sqlite": "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?"},
+		_ = s.query(ctx, map[string]string{"sqlite": "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?"},
 			[]any{table}, func(r *sql.Rows) error { return r.Scan(&create) })
 		autoinc = strings.Contains(strings.ToLower(create.String), "autoincrement")
 	}
@@ -131,7 +131,7 @@ func (s *Builder) GetIndexes(ctx context.Context, table string) ([]IndexInfo, er
 	// SQLite rowid primary keys have no index entry; report them like Laravel.
 	if k, _ := s.kind(ctx); k == "sqlite" && !slices.ContainsFunc(out, func(i IndexInfo) bool { return i.Primary }) {
 		var pk []string
-		s.query(ctx, map[string]string{"sqlite": "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk"},
+		_ = s.query(ctx, map[string]string{"sqlite": "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk"},
 			[]any{table}, func(r *sql.Rows) error {
 				var n string
 				err := r.Scan(&n)
@@ -249,7 +249,7 @@ func (s *Builder) query(ctx context.Context, queries map[string]string, args []a
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	for rows.Next() {
 		if err := each(rows); err != nil {
 			return err

@@ -157,9 +157,9 @@ func (m *Migrator) Reset(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	var target []string
-	for i := len(all) - 1; i >= 0; i-- {
-		if _, ok := ran[all[i].Name]; ok {
-			target = append(target, all[i].Name)
+	for _, m := range slices.Backward(all) {
+		if _, ok := ran[m.Name]; ok {
+			target = append(target, m.Name)
 		}
 	}
 	return m.down(ctx, target)
@@ -311,7 +311,7 @@ func (m *Migrator) ran(ctx context.Context) (map[string]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	out := map[string]int{}
 	for rows.Next() {
 		var name string

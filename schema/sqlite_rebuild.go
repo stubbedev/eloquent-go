@@ -40,15 +40,17 @@ func (s *Builder) rebuildSQLite(ctx context.Context, g grammar, bp *Blueprint) e
 		generated      bool
 	}
 	var createSQL string
-	s.query(ctx, map[string]string{"sqlite": "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?"},
-		[]any{table}, func(r *sql.Rows) error { return r.Scan(&createSQL) })
+	if err := s.query(ctx, map[string]string{"sqlite": "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?"},
+		[]any{table}, func(r *sql.Rows) error { return r.Scan(&createSQL) }); err != nil {
+		return err
+	}
 	original := columnDefs(createSQL)
 	type xcol struct {
 		name      string
 		generated bool
 	}
 	var order []xcol
-	s.query(ctx, map[string]string{"sqlite": "SELECT name, hidden IN (2, 3) FROM pragma_table_xinfo(?) ORDER BY cid"},
+	_ = s.query(ctx, map[string]string{"sqlite": "SELECT name, hidden IN (2, 3) FROM pragma_table_xinfo(?) ORDER BY cid"},
 		[]any{table}, func(r *sql.Rows) error {
 			var c xcol
 			err := r.Scan(&c.name, &c.generated)
@@ -202,7 +204,7 @@ func (s *Builder) rebuildSQLite(ctx context.Context, g grammar, bp *Blueprint) e
 		}
 	}
 	var fkOn bool
-	s.query(ctx, map[string]string{"sqlite": "PRAGMA foreign_keys"}, nil, func(r *sql.Rows) error { return r.Scan(&fkOn) })
+	_ = s.query(ctx, map[string]string{"sqlite": "PRAGMA foreign_keys"}, nil, func(r *sql.Rows) error { return r.Scan(&fkOn) })
 	var stmts []string
 	if fkOn {
 		stmts = append(stmts, g.foreignKeyChecks(false))
@@ -250,7 +252,7 @@ func splitTopLevel(s string) []string {
 	var parts []string
 	depth, start := 0, 0
 	var quote byte
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case quote != 0:

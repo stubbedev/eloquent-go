@@ -74,15 +74,6 @@ func (b *SQL) Col(table, column string) {
 	b.Ident(column)
 }
 
-func (b *SQL) join(sep string, frags []frag) {
-	for i, f := range frags {
-		if i > 0 {
-			b.sb.WriteString(sep)
-		}
-		f(b)
-	}
-}
-
 // withAlias renders f with table aliased, restoring the previous mapping after.
 func (b *SQL) withAlias(table, alias string, f frag) {
 	prev, had := b.alias[table]

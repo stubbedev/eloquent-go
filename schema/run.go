@@ -99,8 +99,7 @@ func Run(ctx context.Context, m *Migrator, args []string, out io.Writer) error {
 			return err
 		}
 		ran, err := m.Migrate(ctx, *step)
-		report("Migrated", ran, err)
-		if err != nil || !*seed {
+		if err := report("Migrated", ran, err); err != nil || !*seed {
 			return err
 		}
 		return SeedReportOn(ctx, out, seedConn, names...)
@@ -112,14 +111,14 @@ func Run(ctx context.Context, m *Migrator, args []string, out io.Writer) error {
 		return report("Rolled back", ran, err)
 	case "refresh":
 		ran, err := m.Refresh(ctx)
-		report("Migrated", ran, err)
+		_ = report("Migrated", ran, err)
 		if err != nil || !*seed {
 			return err
 		}
 		return SeedReportOn(ctx, out, seedConn, names...)
 	case "fresh":
 		ran, err := m.Fresh(ctx)
-		report("Migrated", ran, err)
+		_ = report("Migrated", ran, err)
 		if err != nil || !*seed {
 			return err
 		}
@@ -224,11 +223,11 @@ func MakeMigration(dir, pkg, name string, at time.Time) (string, error) {
 	} else if m := alterRe.FindStringSubmatch(name); m != nil {
 		data["Table"] = m[1]
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, full+".go")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // the path is assembled from the -dir flag and a generated file name
 	if err != nil {
 		return "", err
 	}

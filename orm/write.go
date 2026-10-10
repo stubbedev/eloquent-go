@@ -96,7 +96,7 @@ func (q Query[M]) performInsert(ctx context.Context, m *M) error {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer closeRows(rows)
 		if rows.Next() {
 			if err := rows.Scan(t.Ptr(m, t.PrimaryKey)); err != nil {
 				return err
@@ -545,12 +545,15 @@ func (q Query[M]) Prune(ctx context.Context, chunk int) (int, error) {
 
 // SaveQuietly, DeleteQuietly, ForceDeleteQuietly and RestoreQuietly skip model events.
 func (t *Table[M]) SaveQuietly(ctx context.Context, m *M) error { return t.Save(WithoutEvents(ctx), m) }
+
 func (t *Table[M]) DeleteQuietly(ctx context.Context, m *M) error {
 	return t.Delete(WithoutEvents(ctx), m)
 }
+
 func (t *Table[M]) ForceDeleteQuietly(ctx context.Context, m *M) error {
 	return t.ForceDelete(WithoutEvents(ctx), m)
 }
+
 func (t *Table[M]) RestoreQuietly(ctx context.Context, m *M) error {
 	return t.Restore(WithoutEvents(ctx), m)
 }
@@ -602,7 +605,7 @@ func (q Query[M]) InsertGetID(ctx context.Context, m M) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		defer rows.Close()
+		defer closeRows(rows)
 		if rows.Next() {
 			var id int64
 			if err := rows.Scan(&id); err != nil {

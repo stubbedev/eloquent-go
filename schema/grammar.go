@@ -97,7 +97,7 @@ func (g grammar) typeOf(c *Column) string {
 	auto := c.IsAutoIncrement && c.Identity == ""
 	switch g.kind {
 	case "duckdb":
-		return duckdbType(c, auto)
+		return duckdbType(c)
 	case "clickhouse":
 		return clickhouseType(c)
 	}

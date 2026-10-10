@@ -18,13 +18,13 @@ import (
 	"log"
 	"os"
 
-	_ "github.com/stubbedev/eloquent-go/example/migrations"
-	"github.com/stubbedev/eloquent-go/orm"
-	"github.com/stubbedev/eloquent-go/schema"
-
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
+
+	_ "github.com/stubbedev/eloquent-go/example/migrations"
+	"github.com/stubbedev/eloquent-go/orm"
+	"github.com/stubbedev/eloquent-go/schema"
 )
 
 func main() {

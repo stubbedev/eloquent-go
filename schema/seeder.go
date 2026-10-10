@@ -137,11 +137,11 @@ func MakeSeeder(dir, pkg, name string) (string, error) {
 	if !strings.HasSuffix(file, "_seeder") {
 		file += "_seeder"
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, file+".go")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // the path is assembled from the -dir flag and a generated file name
 	if err != nil {
 		return "", err
 	}
@@ -171,11 +171,11 @@ type {{.Name}} struct {
 func MakeModel(dir, pkg, name string) (string, error) {
 	table := pluralize(snake(name))
 	data := map[string]any{"Package": pkg, "Name": name, "Table": table}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, snake(name)+".go")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // the path is assembled from the -dir flag and a generated file name
 	if err != nil {
 		return "", err
 	}

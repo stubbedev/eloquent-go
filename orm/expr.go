@@ -3,6 +3,7 @@ package orm
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 )
@@ -193,18 +194,20 @@ type Column[M, V any] struct {
 
 // NewColumn declares a persisted column.
 func NewColumn[M, V any](t *Table[M], name string, ptr func(*M) *V) Column[M, V] {
-	c := Column[M, V]{table: t, name: name, ptr: ptr}
-	c.Scalar = Scalar[M, V]{f: func(b *SQL) { b.Col(t.Name, name) }, tab: t.Name, col: name}
-	return c
+	return Column[M, V]{
+		f: func(b *SQL) { b.Col(t.Name, name) }, tab: t.Name, col: name,
+		table: t, name: name, ptr: ptr,
+	}
 }
 
 // NewVirtualColumn declares a column that is only ever selected, never
 // persisted — the target of withCount, addSelect subqueries or aggregates
 // (db:"posts_count,virtual" in a model).
 func NewVirtualColumn[M, V any](t *Table[M], name string, ptr func(*M) *V) Column[M, V] {
-	c := Column[M, V]{table: t, name: name, ptr: ptr, virtual: true}
-	c.Scalar = Scalar[M, V]{f: func(b *SQL) { b.Ident(name) }, tab: t.Name, col: name}
-	return c
+	return Column[M, V]{
+		f: func(b *SQL) { b.Ident(name) }, tab: t.Name, col: name,
+		table: t, name: name, ptr: ptr, virtual: true,
+	}
 }
 
 func (c Column[M, V]) Name() string      { return c.name }
@@ -242,7 +245,9 @@ func (c Column[M, V]) SetExpr(e Expr[M, V]) Assignment[M] {
 // Original is the value as last loaded from or saved to the database.
 func (c Column[M, V]) Original(m *M) V {
 	if v, ok := c.table.state(m).original[c.name]; ok {
-		return v.(V)
+		if typed, ok := v.(V); ok {
+			return typed
+		}
 	}
 	var zero V
 	return zero
@@ -257,12 +262,7 @@ func (c Column[M, V]) IsDirty(m *M) bool {
 
 // WasChanged reports whether the last save changed the column.
 func (c Column[M, V]) WasChanged(m *M) bool {
-	for _, n := range c.table.state(m).changes {
-		if n == c.name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.table.state(m).changes, c.name)
 }
 
 // outer references the column without table aliasing, for correlating a

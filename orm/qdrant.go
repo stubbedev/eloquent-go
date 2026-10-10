@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -171,7 +172,9 @@ func (s *QdrantStore) FindDocs(ctx context.Context, table string, p Plan) ([]map
 		if res.Result.Next == nil || (p.Limit > 0 && len(docs) >= p.Limit) {
 			break
 		}
-		offset = int(*res.Result.Next)
+		if next := *res.Result.Next; next <= math.MaxInt32 {
+			offset = int(next)
+		}
 	}
 	if p.Limit > 0 && len(docs) > p.Limit {
 		docs = docs[:p.Limit]

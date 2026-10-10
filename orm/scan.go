@@ -31,7 +31,7 @@ func assign(dst reflect.Value, src any) error {
 		if dst.IsNil() {
 			dst.Set(reflect.New(dst.Type().Elem()))
 		}
-		if s, ok := dst.Interface().(sql.Scanner); ok {
+		if s, ok := reflect.TypeAssert[sql.Scanner](dst); ok {
 			return s.Scan(src)
 		}
 		return assign(dst.Elem(), src)
@@ -88,7 +88,7 @@ func assign(dst reflect.Value, src any) error {
 			return nil
 		}
 	case reflect.Struct:
-		if dst.Type() == reflect.TypeOf(time.Time{}) {
+		if dst.Type() == reflect.TypeFor[time.Time]() {
 			if s, ok := src.(string); ok {
 				for _, layout := range []string{"2006-01-02 15:04:05.999999999-07:00", "2006-01-02T15:04:05.999999999-07:00", "2006-01-02 15:04:05", "2006-01-02T15:04:05Z", "2006-01-02"} {
 					if t, err := time.Parse(layout, s); err == nil {

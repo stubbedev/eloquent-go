@@ -77,24 +77,32 @@ func main() {
 	flag.Parse()
 
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, *dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go") && fi.Name() != *out
-	}, parser.ParseComments)
+	entries, err := os.ReadDir(*dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if len(pkgs) != 1 {
-		log.Fatalf("ormgen: expected one package in %s, found %d", *dir, len(pkgs))
+	var files []*ast.File
+	var pkgName string
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), "_test.go") || e.Name() == *out || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(*dir, e.Name()), nil, parser.ParseComments)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if pkgName == "" {
+			pkgName = f.Name.Name
+		} else if pkgName != f.Name.Name {
+			log.Fatalf("ormgen: mixed packages in %s: %s and %s", *dir, pkgName, f.Name.Name)
+		}
+		files = append(files, f)
 	}
 
-	var pkgName string
 	var models []model
 	imports := map[string]string{} // path -> alias ("" if default)
-	for name, pkg := range pkgs {
-		pkgName = name
-		for _, file := range pkg.Files {
-			models = append(models, scanFile(file, imports)...)
-		}
+	for _, file := range files {
+		models = append(models, scanFile(file, imports)...)
 	}
 	if len(models) == 0 {
 		log.Fatalf("ormgen: no //orm:table structs found in %s", *dir)
@@ -105,7 +113,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(*dir, *out), src, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(*dir, *out), src, 0o644); err != nil { //nolint:gosec // generated sources are world-readable by convention
 		log.Fatal(err)
 	}
 }
@@ -114,7 +122,10 @@ func scanFile(file *ast.File, imports map[string]string) []model {
 	// Index the file's imports by the name they are referenced with.
 	byName := map[string]*ast.ImportSpec{}
 	for _, spec := range file.Imports {
-		path, _ := strconv.Unquote(spec.Path.Value)
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			log.Fatalf("ormgen: bad import path %q: %v", spec.Path.Value, err)
+		}
 		name := filepath.Base(path)
 		if spec.Name != nil {
 			name = spec.Name.Name
@@ -129,7 +140,10 @@ func scanFile(file *ast.File, imports map[string]string) []model {
 			continue
 		}
 		for _, spec := range gen.Specs {
-			ts := spec.(*ast.TypeSpec)
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
 			st, ok := ts.Type.(*ast.StructType)
 			if !ok {
 				continue

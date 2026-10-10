@@ -198,10 +198,7 @@ func mongoFilter(n Node) (bson.D, error) {
 func mongoCond(n Node) (bson.D, error) {
 	switch c := n.(type) {
 	case Field:
-		v, err := mongoValue(c.Value)
-		if err != nil {
-			return nil, err
-		}
+		v := mongoValue(c.Value)
 		switch c.Op {
 		case "=":
 			return bson.D{{Key: c.Column, Value: v}}, nil
@@ -224,11 +221,7 @@ func mongoCond(n Node) (bson.D, error) {
 	case List:
 		vals := make([]any, len(c.Values))
 		for i, v := range c.Values {
-			x, err := mongoValue(v)
-			if err != nil {
-				return nil, err
-			}
-			vals[i] = x
+			vals[i] = mongoValue(v)
 		}
 		op := "$in"
 		if c.Not {
@@ -236,14 +229,7 @@ func mongoCond(n Node) (bson.D, error) {
 		}
 		return bson.D{{Key: c.Column, Value: bson.D{{Key: op, Value: vals}}}}, nil
 	case Range:
-		lo, err := mongoValue(c.Lo)
-		if err != nil {
-			return nil, err
-		}
-		hi, err := mongoValue(c.Hi)
-		if err != nil {
-			return nil, err
-		}
+		lo, hi := mongoValue(c.Lo), mongoValue(c.Hi)
 		inner := bson.D{{Key: "$gte", Value: lo}, {Key: "$lte", Value: hi}}
 		if c.Not {
 			return bson.D{{Key: "$or", Value: bson.A{
@@ -332,6 +318,6 @@ func likeRegex(v any) (string, error) {
 	return b.String(), nil
 }
 
-func mongoValue(v any) (any, error) {
-	return bsonValue(v), nil
+func mongoValue(v any) any {
+	return bsonValue(v)
 }

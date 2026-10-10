@@ -330,7 +330,7 @@ func (r RowQuery) Get(ctx context.Context) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	return scanMaps(rows)
 }
 
@@ -373,7 +373,7 @@ func (r RowQuery) Count(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	if rows.Next() {
 		if err := rows.Scan(&n); err != nil {
 			return 0, err
@@ -389,7 +389,7 @@ func (r RowQuery) Exists(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	return rows.Next(), rows.Err()
 }
 
@@ -416,7 +416,7 @@ func (r RowQuery) InsertGetID(ctx context.Context, m map[string]any) (int64, err
 		if err != nil {
 			return 0, err
 		}
-		defer rows.Close()
+		defer closeRows(rows)
 		if rows.Next() {
 			var id int64
 			if err := rows.Scan(&id); err != nil {

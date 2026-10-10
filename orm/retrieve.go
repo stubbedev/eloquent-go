@@ -36,7 +36,7 @@ func (q Query[M]) Get(ctx context.Context) ([]M, error) {
 }
 
 func (q Query[M]) scan(rows *sql.Rows) ([]M, error) {
-	defer rows.Close()
+	defer closeRows(rows)
 	dests := q.dests()
 	var models []M
 	for rows.Next() {
@@ -146,7 +146,7 @@ func (q Query[M]) Exists(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	return rows.Next(), rows.Err()
 }
 
@@ -197,7 +197,7 @@ func (q Query[M]) Pluck[V any](ctx context.Context, e Expr[M, V]) ([]V, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []V
 	for rows.Next() {
 		var v V
@@ -218,7 +218,7 @@ func (q Query[M]) PluckMap[K comparable, V any](ctx context.Context, key Expr[M,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	out := map[K]V{}
 	for rows.Next() {
 		var k K
@@ -298,7 +298,7 @@ func scalarOf[V, M any](ctx context.Context, q Query[M], f frag) (V, error) {
 	if err != nil {
 		return v, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	if rows.Next() {
 		if err := rows.Scan(nullable{&v}); err != nil {
 			return v, err
@@ -324,7 +324,7 @@ func (q Query[M]) Explain(ctx context.Context) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	return scanMaps(rows)
 }
 
@@ -446,7 +446,7 @@ func (q Query[M]) Cursor(ctx context.Context) iter.Seq2[M, error] {
 			yield(zero, err)
 			return
 		}
-		defer rows.Close()
+		defer closeRows(rows)
 		dests := q.dests()
 		for rows.Next() {
 			var m M
@@ -579,7 +579,7 @@ func cursorCond[M any](orders []Order[M], cursor string) (Cond[M], error) {
 	}
 	var parts []json.RawMessage
 	if err := json.Unmarshal(raw, &parts); err != nil || len(parts) != len(orders) {
-		return Cond[M]{}, fmt.Errorf("orm: bad cursor")
+		return Cond[M]{}, errors.New("orm: bad cursor")
 	}
 	vals := make([]any, len(parts))
 	for i, p := range parts {

@@ -125,7 +125,7 @@ func OpenReadWrite(name, driver, readDSN, writeDSN string) (*sql.DB, error) {
 	}
 	write, err := sql.Open(driver, writeDSN)
 	if err != nil {
-		read.Close()
+		_ = read.Close()
 		return nil, err
 	}
 	connMu.Lock()
@@ -211,11 +211,11 @@ func TransactionOnce(ctx context.Context, name string, fn func(ctx context.Conte
 	st := &txState{conn: Conn{DB: tx, Dialect: c.Dialect}, after: new([]func(context.Context))}
 	defer func() {
 		if p := recover(); p != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			panic(p)
 		}
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return
 		}
 		if err = tx.Commit(); err == nil {
@@ -236,7 +236,7 @@ func savepoint(ctx context.Context, name string, parent *txState, fn func(ctx co
 	mark := len(*parent.after)
 	child := &txState{conn: parent.conn, depth: parent.depth + 1, after: parent.after}
 	rollback := func() {
-		parent.conn.DB.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+sp)
+		_, _ = parent.conn.DB.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+sp)
 		*parent.after = (*parent.after)[:mark]
 	}
 	defer func() {

@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stubbedev/eloquent-go/orm"
-
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
+
+	"github.com/stubbedev/eloquent-go/orm"
 )
 
 // Like the model tests, these run on SQLite unless ELOQUENT_TEST_DRIVER and

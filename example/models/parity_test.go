@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/stubbedev/eloquent-go/example/models"
-	"github.com/stubbedev/eloquent-go/orm"
-	"github.com/stubbedev/eloquent-go/schema"
-
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
+
+	. "github.com/stubbedev/eloquent-go/example/models"
+	"github.com/stubbedev/eloquent-go/orm"
+	"github.com/stubbedev/eloquent-go/schema"
 )
 
 func TestInsertGetID(t *testing.T) {
@@ -211,8 +211,10 @@ func TestStickyReadsSeeWrites(t *testing.T) {
 	}
 
 	// The read replica only ever sees the seeded row.
-	seedRow := map[string]any{"name": "Replica Only", "email": "replica@example.com",
-		"active": true, "karma": 1, "created_at": "2026-01-01 10:00:00", "updated_at": "2026-01-01 10:00:00"}
+	seedRow := map[string]any{
+		"name": "Replica Only", "email": "replica@example.com",
+		"active": true, "karma": 1, "created_at": "2026-01-01 10:00:00", "updated_at": "2026-01-01 10:00:00",
+	}
 	if err := orm.From("users").On("stickyseed").Insert(ctx, seedRow); err != nil {
 		t.Fatal(err)
 	}
@@ -222,8 +224,10 @@ func TestStickyReadsSeeWrites(t *testing.T) {
 	}
 
 	insert := func(ctx context.Context, email string) error {
-		return orm.From("users").On("sticky").Insert(ctx, map[string]any{"name": "W", "email": email,
-			"active": true, "karma": 0, "created_at": "2026-01-02 10:00:00", "updated_at": "2026-01-02 10:00:00"})
+		return orm.From("users").On("sticky").Insert(ctx, map[string]any{
+			"name": "W", "email": email,
+			"active": true, "karma": 0, "created_at": "2026-01-02 10:00:00", "updated_at": "2026-01-02 10:00:00",
+		})
 	}
 
 	// Without Sticky, reads always hit the read pool.

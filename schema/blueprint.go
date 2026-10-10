@@ -112,8 +112,10 @@ func (b *Blueprint) Increments(name string) *Column    { return b.increments(nam
 func (b *Blueprint) MediumIncrements(name string) *Column {
 	return b.increments(name, TypeMediumInteger)
 }
+
 func (b *Blueprint) SmallIncrements(name string) *Column { return b.increments(name, TypeSmallInteger) }
-func (b *Blueprint) TinyIncrements(name string) *Column  { return b.increments(name, TypeTinyInteger) }
+
+func (b *Blueprint) TinyIncrements(name string) *Column { return b.increments(name, TypeTinyInteger) }
 
 func (b *Blueprint) String(name string, length ...int) *Column {
 	c := b.add(name, TypeString)
@@ -138,8 +140,10 @@ func (b *Blueprint) MediumInteger(name string) *Column { return b.add(name, Type
 func (b *Blueprint) Integer(name string) *Column       { return b.add(name, TypeInteger) }
 func (b *Blueprint) BigInteger(name string) *Column    { return b.add(name, TypeBigInteger) }
 
-func (b *Blueprint) UnsignedTinyInteger(name string) *Column  { return b.TinyInteger(name).Unsigned() }
+func (b *Blueprint) UnsignedTinyInteger(name string) *Column { return b.TinyInteger(name).Unsigned() }
+
 func (b *Blueprint) UnsignedSmallInteger(name string) *Column { return b.SmallInteger(name).Unsigned() }
+
 func (b *Blueprint) UnsignedMediumInteger(name string) *Column {
 	return b.MediumInteger(name).Unsigned()
 }
@@ -187,6 +191,7 @@ func (b *Blueprint) ULIDPrimary(name ...string) *Column { return b.ULID(first(na
 func (b *Blueprint) IPAddress(name ...string) *Column {
 	return b.add(first(name, "ip_address"), TypeIPAddress)
 }
+
 func (b *Blueprint) MACAddress(name ...string) *Column {
 	return b.add(first(name, "mac_address"), TypeMACAddress)
 }
@@ -452,9 +457,11 @@ func (b *Blueprint) RenameColumn(from, to string) {
 func (b *Blueprint) DropIndex(nameOrCols ...string)    { b.drop("dropIndex", "index", nameOrCols) }
 func (b *Blueprint) DropUnique(nameOrCols ...string)   { b.drop("dropIndex", "unique", nameOrCols) }
 func (b *Blueprint) DropFullText(nameOrCols ...string) { b.drop("dropIndex", "fulltext", nameOrCols) }
+
 func (b *Blueprint) DropSpatialIndex(nameOrCols ...string) {
 	b.drop("dropIndex", "spatialindex", nameOrCols)
 }
+
 func (b *Blueprint) DropForeign(nameOrCols ...string) { b.drop("dropForeign", "foreign", nameOrCols) }
 
 func (b *Blueprint) DropPrimary() {

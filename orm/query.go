@@ -157,6 +157,7 @@ func (q Query[M]) Join[O any](t *Table[O], on ...Cond[O]) Query[M] { return q.jo
 func (q Query[M]) LeftJoin[O any](t *Table[O], on ...Cond[O]) Query[M] {
 	return q.join("LEFT JOIN", t, on)
 }
+
 func (q Query[M]) RightJoin[O any](t *Table[O], on ...Cond[O]) Query[M] {
 	return q.join("RIGHT JOIN", t, on)
 }

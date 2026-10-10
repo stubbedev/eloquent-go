@@ -102,7 +102,7 @@ func (sqliteDialect) Limit(b *SQL, l, o int)       { limit(b, l, o, "-1") }
 func (sqliteDialect) JSONLength(b *SQL, e AnyExpr) { fn(b, "json_array_length", e) }
 
 func (sqliteDialect) OnConflict(b *SQL, ignore bool, uniqueBy, update []string) {
-	onConflict(b, sqliteDialect{}, ignore, uniqueBy, update)
+	onConflict(b, ignore, uniqueBy, update)
 }
 
 func (sqliteDialect) DatePart(b *SQL, part string, e AnyExpr) {
@@ -218,7 +218,7 @@ func (postgresDialect) Lock(m LockMode) string {
 }
 
 func (postgresDialect) OnConflict(b *SQL, ignore bool, uniqueBy, update []string) {
-	onConflict(b, postgresDialect{}, ignore, uniqueBy, update)
+	onConflict(b, ignore, uniqueBy, update)
 }
 
 func (postgresDialect) DatePart(b *SQL, part string, e AnyExpr) {
@@ -429,7 +429,7 @@ func (mysqlDialect) VectorDistance(b *SQL, e AnyExpr, arg any, m VectorMetric) {
 
 // ---------------------------------------------------------------------------
 
-func onConflict(b *SQL, d Dialect, ignore bool, uniqueBy, update []string) {
+func onConflict(b *SQL, ignore bool, uniqueBy, update []string) {
 	b.Write(" ON CONFLICT")
 	if len(uniqueBy) > 0 {
 		b.Write(" (")
@@ -485,7 +485,7 @@ func jsonPath(path []string) string { return "$." + strings.Join(path, ".") }
 func writeList(b *SQL, v any) {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
-		for i := 0; i < rv.Len(); i++ {
+		for i := range rv.Len() {
 			if i > 0 {
 				b.Write(", ")
 			}

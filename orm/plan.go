@@ -103,5 +103,3 @@ func IsNotTranslatable(err error) bool {
 	var e *ErrNotTranslatable
 	return errors.As(err, &e)
 }
-
-var errNoVectorInPlan = &ErrNotTranslatable{Reason: "vector ordering needs a plain Vector column"}

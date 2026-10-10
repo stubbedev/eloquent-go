@@ -11,14 +11,14 @@ import (
 	"sync"
 	"testing"
 
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "modernc.org/sqlite"
+
 	_ "github.com/stubbedev/eloquent-go/example/migrations"
 	. "github.com/stubbedev/eloquent-go/example/models"
 	"github.com/stubbedev/eloquent-go/orm"
 	"github.com/stubbedev/eloquent-go/schema"
-
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "modernc.org/sqlite"
 )
 
 const seed = `
@@ -96,7 +96,7 @@ func setup(t *testing.T) context.Context {
 	if _, err := schema.NewMigrator().Migrate(ctx, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, stmt := range strings.Split(strings.TrimSpace(seed), ";\n") {
+	for stmt := range strings.SplitSeq(strings.TrimSpace(seed), ";\n") {
 		if _, err := mainDB.Exec(strings.TrimSuffix(stmt, ";")); err != nil {
 			t.Fatalf("seed: %v\n%s", err, stmt)
 		}
@@ -759,7 +759,8 @@ func TestMoreWrites(t *testing.T) {
 	ok(Images.Create(ctx, &img))
 	eq(t, "truncate resets ids", img.ID, int64(1))
 
-	eq(t, "ulid", len(orm.NewULID()) == 26 && orm.NewULID() != orm.NewULID(), true)
+	a, b := orm.NewULID(), orm.NewULID()
+	eq(t, "ulid", len(a) == 26 && a != b, true)
 }
 
 func TestMoreQueries(t *testing.T) {
