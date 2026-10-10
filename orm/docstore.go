@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // DocStore is a non-SQL backend behind the same builder: MongoDB and Qdrant
@@ -17,6 +18,9 @@ type DocStore interface {
 	// InsertDocs stores documents; the primary key column must be present
 	// when the model's key is not client-generated.
 	InsertDocs(ctx context.Context, table string, docs []map[string]any) error
+	// UpsertDocs stores documents, replacing any existing document that
+	// matches on all of keys (upsert).
+	UpsertDocs(ctx context.Context, table string, docs []map[string]any, keys []string) error
 	// UpdateDocs applies sets to matching documents and reports how many
 	// matched.
 	UpdateDocs(ctx context.Context, table string, p Plan, sets map[string]any) (int64, error)
@@ -152,11 +156,7 @@ func (q Query[M]) countDocs(ctx context.Context) (int64, bool, error) {
 	return n, true, err
 }
 
-func (q Query[M]) writeDocs(ctx context.Context, insert bool, method string, models []*M) error {
-	ds, ok, err := q.docstore(ctx)
-	if err != nil || !ok {
-		return err
-	}
+func (q Query[M]) docMaps(method string, models []*M) ([]map[string]any, error) {
 	t := q.table
 	docs := make([]map[string]any, len(models))
 	for i, m := range models {
@@ -166,12 +166,65 @@ func (q Query[M]) writeDocs(ctx context.Context, insert bool, method string, mod
 				doc[c] = v
 			}
 		}
-		if insert && t.PrimaryKey != "" && t.KeyType == KeyAutoIncrement && isZero(t.key(m)) {
-			return fmt.Errorf("orm: %s: %s needs a uuid, ulid or manual key on a document store", method, t.Name)
+		if t.PrimaryKey != "" && t.KeyType == KeyAutoIncrement && isZero(t.key(m)) {
+			return nil, fmt.Errorf("orm: %s: %s needs a uuid, ulid or manual key on a document store", method, t.Name)
 		}
 		docs[i] = doc
 	}
-	return ds.InsertDocs(ctx, t.Name, docs)
+	return docs, nil
+}
+
+func (q Query[M]) writeDocs(ctx context.Context, method string, models []*M) error {
+	ds, ok, err := q.docstore(ctx)
+	if err != nil || !ok {
+		return err
+	}
+	docs, err := q.docMaps(method, models)
+	if err != nil {
+		return err
+	}
+	return ds.InsertDocs(ctx, q.table.Name, docs)
+}
+
+// insertOrIgnoreDocs inserts only the documents whose key combination is
+// not present yet. The read-then-write gap means a concurrent writer can
+// still insert the same key; a unique index on keys makes that safe.
+func insertOrIgnoreDocs(ctx context.Context, ds DocStore, table string, docs []map[string]any, keys []string) error {
+	parts := make([]Node, 0, len(keys))
+	for _, k := range keys {
+		vals := make([]any, 0, len(docs))
+		for _, d := range docs {
+			if v, ok := d[k]; ok {
+				vals = append(vals, v)
+			}
+		}
+		if len(vals) > 0 {
+			parts = append(parts, List{Table: table, Column: k, Values: vals})
+		}
+	}
+	existing, err := ds.FindDocs(ctx, table, Plan{Table: table, Where: Composite{Parts: parts}})
+	if err != nil {
+		return err
+	}
+	taken := make(map[string]bool, len(existing))
+	for _, d := range existing {
+		taken[docKey(keys, d)] = true
+	}
+	fresh := make([]map[string]any, 0, len(docs))
+	for _, d := range docs {
+		if !taken[docKey(keys, d)] {
+			fresh = append(fresh, d)
+		}
+	}
+	return ds.InsertDocs(ctx, table, fresh)
+}
+
+func docKey(keys []string, doc map[string]any) string {
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprint(doc[k])
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func (q Query[M]) updateDocs(ctx context.Context, sets []Assignment[M], method string) (int64, bool, error) {

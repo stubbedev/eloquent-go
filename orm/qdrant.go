@@ -233,14 +233,13 @@ func (s *QdrantStore) InsertDocs(ctx context.Context, table string, docs []map[s
 		payload := map[string]any{}
 		var vector []float64
 		for k, v := range doc {
-			if k == key {
-				continue
-			}
+			// Every column lands in the payload, the key and the vector
+			// included: filters match payload fields, not point metadata, so
+			// documents must be self-contained to be queryable after a read.
+			payload[k] = jsonValue(v)
 			if f, ok := vectorOf(v); ok {
 				vector = f
-				continue
 			}
-			payload[k] = jsonValue(v)
 		}
 		pt := map[string]any{"id": id, "payload": payload}
 		if vector != nil {
@@ -253,6 +252,12 @@ func (s *QdrantStore) InsertDocs(ctx context.Context, table string, docs []map[s
 	}
 	return s.do(ctx, http.MethodPut, "/collections/"+table+"/points?wait=true",
 		map[string]any{"points": points}, nil)
+}
+
+// UpsertDocs overwrites the matching points: the PUT points endpoint is
+// idempotent on the point id, which is the document key.
+func (s *QdrantStore) UpsertDocs(ctx context.Context, table string, docs []map[string]any, keys []string) error {
+	return s.InsertDocs(ctx, table, docs)
 }
 
 func (s *QdrantStore) UpdateDocs(ctx context.Context, table string, p Plan, sets map[string]any) (int64, error) {

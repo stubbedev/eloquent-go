@@ -51,6 +51,16 @@ func (q Query[M]) Save(ctx context.Context, m *M) error {
 	return t.fire(ctx, Saved, m)
 }
 
+// assignKey fills a missing uuid or ulid primary key (HasUuids / HasUlids).
+func (t *Table[M]) assignKey(m *M) {
+	switch {
+	case t.KeyType == KeyUUID && isZero(t.key(m)):
+		t.setValue(m, t.PrimaryKey, NewUUIDv7())
+	case t.KeyType == KeyULID && isZero(t.key(m)):
+		t.setValue(m, t.PrimaryKey, NewULID())
+	}
+}
+
 func (q Query[M]) performInsert(ctx context.Context, m *M) error {
 	t := q.table
 	if err := t.fire(ctx, Creating, m); err != nil {
@@ -64,12 +74,7 @@ func (q Query[M]) performInsert(ctx context.Context, m *M) error {
 			}
 		}
 	}
-	switch {
-	case t.KeyType == KeyUUID && isZero(t.key(m)):
-		t.setValue(m, t.PrimaryKey, NewUUIDv7())
-	case t.KeyType == KeyULID && isZero(t.key(m)):
-		t.setValue(m, t.PrimaryKey, NewULID())
-	}
+	t.assignKey(m)
 	autoKey := t.KeyType == KeyAutoIncrement && t.PrimaryKey != "" && isZero(t.key(m))
 	cols := slices.DeleteFunc(slices.Clone(t.Columns), func(c string) bool { return autoKey && c == t.PrimaryKey })
 
@@ -132,7 +137,7 @@ func (q Query[M]) insertDoc(ctx context.Context, m *M) (bool, error) {
 		return false, nil
 	}
 	t := q.table
-	if err := q.writeDocs(ctx, true, "insert", []*M{m}); err != nil {
+	if err := q.writeDocs(ctx, "insert", []*M{m}); err != nil {
 		return true, err
 	}
 	st := t.state(m)
@@ -656,21 +661,29 @@ func (q Query[M]) insertRows(ctx context.Context, _ string, ignore bool, uniq, u
 	if ds, ok, err := q.docstore(ctx); err != nil {
 		return err
 	} else if ok {
-		if ignore || upd != nil {
-			return &ErrNotTranslatable{Reason: "insertOrIgnore / upsert (use ReplaceDocs on the store, or Insert then Update)"}
-		}
-		if t.KeyType == KeyAutoIncrement && t.PrimaryKey != "" &&
-			slices.ContainsFunc(ms, func(m M) bool { return isZero(t.key(&m)) }) {
-			return fmt.Errorf("orm: %s needs a uuid, ulid or manual key on a document store", t.Name)
-		}
-		if ds == nil {
-			return nil
+		for i := range ms {
+			t.assignKey(&ms[i]) // document stores have no generated keys
 		}
 		ptrs := make([]*M, len(ms))
 		for i := range ms {
 			ptrs[i] = &ms[i]
 		}
-		return q.writeDocs(ctx, false, "insert", ptrs)
+		docs, err := q.docMaps("insert", ptrs)
+		if err != nil {
+			return err
+		}
+		keys := slices.Clone(uniq)
+		if len(keys) == 0 {
+			keys = []string{t.PrimaryKey}
+		}
+		switch {
+		case ignore:
+			return insertOrIgnoreDocs(ctx, ds, t.Name, docs, keys)
+		case upd != nil:
+			return ds.UpsertDocs(ctx, t.Name, docs, keys)
+		default:
+			return ds.InsertDocs(ctx, t.Name, docs)
+		}
 	}
 	cols := slices.Clone(t.Columns)
 	if t.KeyType == KeyAutoIncrement && t.PrimaryKey != "" &&

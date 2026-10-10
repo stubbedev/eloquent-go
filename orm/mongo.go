@@ -112,6 +112,25 @@ func (s *MongoStore) InsertDocs(ctx context.Context, table string, docs []map[st
 	return nil
 }
 
+// UpsertDocs replaces each document wholesale: models carry complete
+// documents, so matching the keys and replacing equals updating every
+// column, which is what Upsert's default update list asks for.
+func (s *MongoStore) UpsertDocs(ctx context.Context, table string, docs []map[string]any, keys []string) error {
+	for _, doc := range docs {
+		filter := make(bson.D, 0, len(keys))
+		for _, k := range keys {
+			filter = append(filter, bson.E{Key: k, Value: bsonValue(doc[k])})
+		}
+		_, err := s.coll(table).UpdateOne(ctx, filter,
+			mongo.Pipeline{bson.D{{Key: "$replaceWith", Value: mongoDoc(doc)}}},
+			options.UpdateOne().SetUpsert(true))
+		if err != nil {
+			return fmt.Errorf("orm: mongo upsert into %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 func (s *MongoStore) UpdateDocs(ctx context.Context, table string, p Plan, sets map[string]any) (int64, error) {
 	filter, err := mongoFilter(p.Where)
 	if err != nil {

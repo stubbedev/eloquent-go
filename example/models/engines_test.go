@@ -294,6 +294,24 @@ func TestMongo(t *testing.T) {
 	eq(t, "join refused", orm.IsNotTranslatable(err), true)
 	_, err = Docs.Query().On("mongo").Where(orm.Raw[Doc]("views > 1")).Get(ctx)
 	eq(t, "raw refused", orm.IsNotTranslatable(err), true)
+
+	// Upsert replaces documents matched on the key columns.
+	kept := must(Docs.Query().On("mongo").Where(Docs.Title.Eq("near")).First(ctx))
+	kept.Views = 77
+	fresh := Doc{Title: "brand new", Views: 1, Vec: orm.NewVector3(2, 0, 0)}
+	ok(Docs.Query().On("mongo").Upsert(ctx, []Doc{kept, fresh}, []orm.AnyColumn[Doc]{Docs.ID}))
+	eq(t, "upsert count", must(Docs.Query().On("mongo").Count(ctx)), int64(3))
+	eq(t, "upsert replaced", must(Docs.Query().On("mongo").Find(ctx, kept.ID)).Views, int64(77))
+	eq(t, "upsert inserted", must(Docs.Query().On("mongo").Where(Docs.Title.Eq("brand new")).Count(ctx)), int64(1))
+
+	// InsertOrIgnore skips documents whose key is already taken.
+	dup := must(Docs.Query().On("mongo").Where(Docs.Title.Eq("near")).First(ctx))
+	dup.Views = 999 // must not land: the key exists
+	another := Doc{Title: "ignored newcomer", Views: 5, Vec: orm.NewVector3(0, 2, 0)}
+	ok(Docs.Query().On("mongo").InsertOrIgnore(ctx, dup, another))
+	eq(t, "orIgnore count", must(Docs.Query().On("mongo").Count(ctx)), int64(4))
+	eq(t, "orIgnore skipped existing", must(Docs.Query().On("mongo").Find(ctx, dup.ID)).Views, int64(77))
+	eq(t, "orIgnore inserted missing", must(Docs.Query().On("mongo").Where(Docs.Title.Eq("ignored newcomer")).Count(ctx)), int64(1))
 }
 
 func TestQdrant(t *testing.T) {
@@ -340,8 +358,24 @@ func TestQdrant(t *testing.T) {
 	rows := must(orm.From("documents").On("qdrant").Where("views", "=", 2).Get(ctx))
 	eq(t, "table query", len(rows), 1)
 
+	// Upsert overwrites the matching point; the PUT is idempotent.
+	kept := must(Docs.Query().On("qdrant").Where(Docs.Title.Eq("near")).First(ctx))
+	kept.Views = 77
+	fresh := Doc{Title: "brand new", Views: 9, Vec: orm.NewVector3(2, 0, 0)}
+	ok(Docs.Query().On("qdrant").Upsert(ctx, []Doc{kept, fresh}, []orm.AnyColumn[Doc]{Docs.ID}))
+	eq(t, "upsert count", must(Docs.Query().On("qdrant").Count(ctx)), int64(4))
+	eq(t, "upsert replaced", must(Docs.Query().On("qdrant").Find(ctx, kept.ID)).Views, int64(77))
+
+	// InsertOrIgnore skips points whose key is already taken.
+	dup := kept
+	dup.Views = 999 // must not land: the key exists
+	another := Doc{Title: "ignored newcomer", Views: 5, Vec: orm.NewVector3(0, 2, 0)}
+	ok(Docs.Query().On("qdrant").InsertOrIgnore(ctx, dup, another))
+	eq(t, "orIgnore count", must(Docs.Query().On("qdrant").Count(ctx)), int64(5))
+	eq(t, "orIgnore skipped existing", must(Docs.Query().On("qdrant").Find(ctx, dup.ID)).Views, int64(77))
+
 	eq(t, "delete", must(Docs.Query().On("qdrant").Where(Docs.Title.Eq("renamed")).Delete(ctx)), int64(1))
-	eq(t, "deleted", must(Docs.Query().On("qdrant").Count(ctx)), int64(2))
+	eq(t, "deleted", must(Docs.Query().On("qdrant").Count(ctx)), int64(4))
 }
 
 func TestPgVector(t *testing.T) {
