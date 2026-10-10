@@ -382,11 +382,13 @@ var {{.Var}} = &orm.Table[{{.Struct}}]{
 type {{.Schema}}Schema struct {
 	*orm.Table[{{.Struct}}]
 {{- range .Fields}}
+	// {{.Name}} is {{if .Virtual}}virtual, not stored: selected extras only{{else}}the {{$m.Table}}.{{.Column}} column{{end}} of {{$m.Struct}} ({{.Type}}).
 	{{.Name}} orm.Column[{{$m.Struct}}, {{.Type}}]
 {{- end}}
 }
 
-// {{.Schema}} is the entry point for {{.Table}}: {{.Schema}}.Query(), {{.Schema}}.Find(ctx, id), ...
+// {{.Schema}} is the entry point for the {{.Table}} table ({{.Struct}}):
+// {{.Schema}}.Query(), {{.Schema}}.Find(ctx, id), {{.Schema}}.Where({{.Schema}}.{{(index .Fields 0).Name}}...) ...
 var {{.Schema}} = {{.Schema}}Schema{
 	Table: {{.Var}},
 {{- range .Fields}}

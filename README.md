@@ -44,6 +44,7 @@ sticky-read and cast tests.
 - [Queries without a model](#queries-without-a-model)
 - [Encrypted and hashed columns](#encrypted-and-hashed-columns)
 - [Packages](#packages)
+- [Editor hints](#editor-hints)
 - [Eloquent feature map](#eloquent-feature-map)
 - [What Go doesn't allow](#what-go-doesnt-allow)
 - [Testing](#testing)
@@ -405,6 +406,34 @@ remains the cast for plain JSON columns, and any `sql.Scanner` /
 | `orm` | Query builder, models, relations, events, scopes, pagination, transactions, factories |
 | `schema` | Blueprint DDL, introspection, migrations, artisan-style CLI (`schema.Run`) |
 | `cmd/ormgen` | Generates typed columns and table metadata from model structs |
+
+## Editor hints
+
+The whole API is generic over the model, so gopls carries the model type
+through every chain: hovering a query variable shows
+`orm.Query[models.User]`, `Pluck(ctx, Users.Email)` shows `[]string`, and a
+condition shows `orm.Cond[models.User]`. ormgen also documents every
+generated symbol, so hovering `Users.Email` shows the column, table and
+field type at once.
+
+To see the types without hovering, turn on gopls inlay hints:
+
+```jsonc
+// VS Code: settings.json (or the equivalent ui.inlay_hint in Neovim)
+"gopls": {
+  "ui.inlayhints": {
+    "assignVariableTypes": true,     // q := Users.Query()  // Query[User]
+    "compositeLiteralTypes": true,
+    "compositeLiteralFields": true, // User{Name: ...}     // Name:
+    "parameterNames": true
+  }
+}
+```
+
+Completion after `Users.` lists every column with its type in the popup;
+`Users.Where(Users.` offers exactly the typed columns, and passing the
+wrong value type (`Users.Karma.Gt("ten")`) is a compile error, not a
+runtime one.
 
 ## Eloquent feature map
 

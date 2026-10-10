@@ -28,11 +28,14 @@ var auditLogTable = &orm.Table[AuditEntry]{
 // AuditLogSchema describes the audit_log table for AuditEntry.
 type AuditLogSchema struct {
 	*orm.Table[AuditEntry]
-	ID     orm.Column[AuditEntry, string]
+	// ID is the audit_log.id column of AuditEntry (string).
+	ID orm.Column[AuditEntry, string]
+	// Action is the audit_log.action column of AuditEntry (string).
 	Action orm.Column[AuditEntry, string]
 }
 
-// AuditLog is the entry point for audit_log: AuditLog.Query(), AuditLog.Find(ctx, id), ...
+// AuditLog is the entry point for the audit_log table (AuditEntry):
+// AuditLog.Query(), AuditLog.Find(ctx, id), AuditLog.Where(AuditLog.ID...) ...
 var AuditLog = AuditLogSchema{
 	Table:  auditLogTable,
 	ID:     orm.NewColumn(auditLogTable, "id", func(m *AuditEntry) *string { return &m.ID }),
@@ -69,15 +72,22 @@ var commentsTable = &orm.Table[Comment]{
 // CommentsSchema describes the comments table for Comment.
 type CommentsSchema struct {
 	*orm.Table[Comment]
-	ID              orm.Column[Comment, int64]
-	CommentableID   orm.Column[Comment, int64]
+	// ID is the comments.id column of Comment (int64).
+	ID orm.Column[Comment, int64]
+	// CommentableID is the comments.commentable_id column of Comment (int64).
+	CommentableID orm.Column[Comment, int64]
+	// CommentableType is the comments.commentable_type column of Comment (string).
 	CommentableType orm.Column[Comment, string]
-	Body            orm.Column[Comment, string]
-	CreatedAt       orm.Column[Comment, time.Time]
-	UpdatedAt       orm.Column[Comment, time.Time]
+	// Body is the comments.body column of Comment (string).
+	Body orm.Column[Comment, string]
+	// CreatedAt is the comments.created_at column of Comment (time.Time).
+	CreatedAt orm.Column[Comment, time.Time]
+	// UpdatedAt is the comments.updated_at column of Comment (time.Time).
+	UpdatedAt orm.Column[Comment, time.Time]
 }
 
-// Comments is the entry point for comments: Comments.Query(), Comments.Find(ctx, id), ...
+// Comments is the entry point for the comments table (Comment):
+// Comments.Query(), Comments.Find(ctx, id), Comments.Where(Comments.ID...) ...
 var Comments = CommentsSchema{
 	Table:           commentsTable,
 	ID:              orm.NewColumn(commentsTable, "id", func(m *Comment) *int64 { return &m.ID }),
@@ -108,11 +118,14 @@ var countriesTable = &orm.Table[Country]{
 // CountriesSchema describes the countries table for Country.
 type CountriesSchema struct {
 	*orm.Table[Country]
-	ID   orm.Column[Country, int64]
+	// ID is the countries.id column of Country (int64).
+	ID orm.Column[Country, int64]
+	// Name is the countries.name column of Country (string).
 	Name orm.Column[Country, string]
 }
 
-// Countries is the entry point for countries: Countries.Query(), Countries.Find(ctx, id), ...
+// Countries is the entry point for the countries table (Country):
+// Countries.Query(), Countries.Find(ctx, id), Countries.Where(Countries.ID...) ...
 var Countries = CountriesSchema{
 	Table: countriesTable,
 	ID:    orm.NewColumn(countriesTable, "id", func(m *Country) *int64 { return &m.ID }),
@@ -143,13 +156,18 @@ var imagesTable = &orm.Table[Image]{
 // ImagesSchema describes the images table for Image.
 type ImagesSchema struct {
 	*orm.Table[Image]
-	ID            orm.Column[Image, int64]
-	ImageableID   orm.Column[Image, int64]
+	// ID is the images.id column of Image (int64).
+	ID orm.Column[Image, int64]
+	// ImageableID is the images.imageable_id column of Image (int64).
+	ImageableID orm.Column[Image, int64]
+	// ImageableType is the images.imageable_type column of Image (string).
 	ImageableType orm.Column[Image, string]
-	URL           orm.Column[Image, string]
+	// URL is the images.url column of Image (string).
+	URL orm.Column[Image, string]
 }
 
-// Images is the entry point for images: Images.Query(), Images.Find(ctx, id), ...
+// Images is the entry point for the images table (Image):
+// Images.Query(), Images.Find(ctx, id), Images.Where(Images.ID...) ...
 var Images = ImagesSchema{
 	Table:         imagesTable,
 	ID:            orm.NewColumn(imagesTable, "id", func(m *Image) *int64 { return &m.ID }),
@@ -190,16 +208,24 @@ var postsTable = &orm.Table[Post]{
 // PostsSchema describes the posts table for Post.
 type PostsSchema struct {
 	*orm.Table[Post]
-	ID        orm.Column[Post, int64]
-	UserID    orm.Column[Post, int64]
-	Title     orm.Column[Post, string]
+	// ID is the posts.id column of Post (int64).
+	ID orm.Column[Post, int64]
+	// UserID is the posts.user_id column of Post (int64).
+	UserID orm.Column[Post, int64]
+	// Title is the posts.title column of Post (string).
+	Title orm.Column[Post, string]
+	// Published is the posts.published column of Post (bool).
 	Published orm.Column[Post, bool]
-	Views     orm.Column[Post, int64]
+	// Views is the posts.views column of Post (int64).
+	Views orm.Column[Post, int64]
+	// CreatedAt is the posts.created_at column of Post (time.Time).
 	CreatedAt orm.Column[Post, time.Time]
+	// UpdatedAt is the posts.updated_at column of Post (time.Time).
 	UpdatedAt orm.Column[Post, time.Time]
 }
 
-// Posts is the entry point for posts: Posts.Query(), Posts.Find(ctx, id), ...
+// Posts is the entry point for the posts table (Post):
+// Posts.Query(), Posts.Find(ctx, id), Posts.Where(Posts.ID...) ...
 var Posts = PostsSchema{
 	Table:     postsTable,
 	ID:        orm.NewColumn(postsTable, "id", func(m *Post) *int64 { return &m.ID }),
@@ -231,11 +257,14 @@ var rolesTable = &orm.Table[Role]{
 // RolesSchema describes the roles table for Role.
 type RolesSchema struct {
 	*orm.Table[Role]
-	ID   orm.Column[Role, int64]
+	// ID is the roles.id column of Role (int64).
+	ID orm.Column[Role, int64]
+	// Name is the roles.name column of Role (string).
 	Name orm.Column[Role, string]
 }
 
-// Roles is the entry point for roles: Roles.Query(), Roles.Find(ctx, id), ...
+// Roles is the entry point for the roles table (Role):
+// Roles.Query(), Roles.Find(ctx, id), Roles.Where(Roles.ID...) ...
 var Roles = RolesSchema{
 	Table: rolesTable,
 	ID:    orm.NewColumn(rolesTable, "id", func(m *Role) *int64 { return &m.ID }),
@@ -268,14 +297,20 @@ var roleUsersTable = &orm.Table[RoleUser]{
 // RoleUsersSchema describes the role_user table for RoleUser.
 type RoleUsersSchema struct {
 	*orm.Table[RoleUser]
-	UserID    orm.Column[RoleUser, int64]
-	RoleID    orm.Column[RoleUser, int64]
+	// UserID is the role_user.user_id column of RoleUser (int64).
+	UserID orm.Column[RoleUser, int64]
+	// RoleID is the role_user.role_id column of RoleUser (int64).
+	RoleID orm.Column[RoleUser, int64]
+	// GrantedBy is the role_user.granted_by column of RoleUser (string).
 	GrantedBy orm.Column[RoleUser, string]
+	// CreatedAt is the role_user.created_at column of RoleUser (time.Time).
 	CreatedAt orm.Column[RoleUser, time.Time]
+	// UpdatedAt is the role_user.updated_at column of RoleUser (time.Time).
 	UpdatedAt orm.Column[RoleUser, time.Time]
 }
 
-// RoleUsers is the entry point for role_user: RoleUsers.Query(), RoleUsers.Find(ctx, id), ...
+// RoleUsers is the entry point for the role_user table (RoleUser):
+// RoleUsers.Query(), RoleUsers.Find(ctx, id), RoleUsers.Where(RoleUsers.UserID...) ...
 var RoleUsers = RoleUsersSchema{
 	Table:     roleUsersTable,
 	UserID:    orm.NewColumn(roleUsersTable, "user_id", func(m *RoleUser) *int64 { return &m.UserID }),
@@ -305,11 +340,14 @@ var tagsTable = &orm.Table[Tag]{
 // TagsSchema describes the tags table for Tag.
 type TagsSchema struct {
 	*orm.Table[Tag]
-	ID   orm.Column[Tag, int64]
+	// ID is the tags.id column of Tag (int64).
+	ID orm.Column[Tag, int64]
+	// Name is the tags.name column of Tag (string).
 	Name orm.Column[Tag, string]
 }
 
-// Tags is the entry point for tags: Tags.Query(), Tags.Find(ctx, id), ...
+// Tags is the entry point for the tags table (Tag):
+// Tags.Query(), Tags.Find(ctx, id), Tags.Where(Tags.ID...) ...
 var Tags = TagsSchema{
 	Table: tagsTable,
 	ID:    orm.NewColumn(tagsTable, "id", func(m *Tag) *int64 { return &m.ID }),
@@ -336,12 +374,16 @@ var taggablesTable = &orm.Table[Taggable]{
 // TaggablesSchema describes the taggables table for Taggable.
 type TaggablesSchema struct {
 	*orm.Table[Taggable]
-	TagID        orm.Column[Taggable, int64]
-	TaggableID   orm.Column[Taggable, int64]
+	// TagID is the taggables.tag_id column of Taggable (int64).
+	TagID orm.Column[Taggable, int64]
+	// TaggableID is the taggables.taggable_id column of Taggable (int64).
+	TaggableID orm.Column[Taggable, int64]
+	// TaggableType is the taggables.taggable_type column of Taggable (string).
 	TaggableType orm.Column[Taggable, string]
 }
 
-// Taggables is the entry point for taggables: Taggables.Query(), Taggables.Find(ctx, id), ...
+// Taggables is the entry point for the taggables table (Taggable):
+// Taggables.Query(), Taggables.Find(ctx, id), Taggables.Where(Taggables.TagID...) ...
 var Taggables = TaggablesSchema{
 	Table:        taggablesTable,
 	TagID:        orm.NewColumn(taggablesTable, "tag_id", func(m *Taggable) *int64 { return &m.TagID }),
@@ -397,23 +439,38 @@ var usersTable = &orm.Table[User]{
 // UsersSchema describes the users table for User.
 type UsersSchema struct {
 	*orm.Table[User]
-	ID              orm.Column[User, int64]
-	CountryID       orm.Column[User, int64]
-	Name            orm.Column[User, string]
-	Email           orm.Column[User, string]
-	Active          orm.Column[User, bool]
-	Karma           orm.Column[User, int]
-	Settings        orm.Column[User, orm.JSON[Settings]]
-	CreatedAt       orm.Column[User, time.Time]
-	UpdatedAt       orm.Column[User, time.Time]
-	DeletedAt       orm.Column[User, *time.Time]
-	PostsCount      orm.Column[User, int64]
-	PostViews       orm.Column[User, int64]
-	HasAvatar       orm.Column[User, bool]
+	// ID is the users.id column of User (int64).
+	ID orm.Column[User, int64]
+	// CountryID is the users.country_id column of User (int64).
+	CountryID orm.Column[User, int64]
+	// Name is the users.name column of User (string).
+	Name orm.Column[User, string]
+	// Email is the users.email column of User (string).
+	Email orm.Column[User, string]
+	// Active is the users.active column of User (bool).
+	Active orm.Column[User, bool]
+	// Karma is the users.karma column of User (int).
+	Karma orm.Column[User, int]
+	// Settings is the users.settings column of User (orm.JSON[Settings]).
+	Settings orm.Column[User, orm.JSON[Settings]]
+	// CreatedAt is the users.created_at column of User (time.Time).
+	CreatedAt orm.Column[User, time.Time]
+	// UpdatedAt is the users.updated_at column of User (time.Time).
+	UpdatedAt orm.Column[User, time.Time]
+	// DeletedAt is the users.deleted_at column of User (*time.Time).
+	DeletedAt orm.Column[User, *time.Time]
+	// PostsCount is virtual, not stored: selected extras only of User (int64).
+	PostsCount orm.Column[User, int64]
+	// PostViews is virtual, not stored: selected extras only of User (int64).
+	PostViews orm.Column[User, int64]
+	// HasAvatar is virtual, not stored: selected extras only of User (bool).
+	HasAvatar orm.Column[User, bool]
+	// LatestPostTitle is virtual, not stored: selected extras only of User (string).
 	LatestPostTitle orm.Column[User, string]
 }
 
-// Users is the entry point for users: Users.Query(), Users.Find(ctx, id), ...
+// Users is the entry point for the users table (User):
+// Users.Query(), Users.Find(ctx, id), Users.Where(Users.ID...) ...
 var Users = UsersSchema{
 	Table:           usersTable,
 	ID:              orm.NewColumn(usersTable, "id", func(m *User) *int64 { return &m.ID }),
@@ -452,11 +509,14 @@ var videosTable = &orm.Table[Video]{
 // VideosSchema describes the videos table for Video.
 type VideosSchema struct {
 	*orm.Table[Video]
-	ID    orm.Column[Video, int64]
+	// ID is the videos.id column of Video (int64).
+	ID orm.Column[Video, int64]
+	// Title is the videos.title column of Video (string).
 	Title orm.Column[Video, string]
 }
 
-// Videos is the entry point for videos: Videos.Query(), Videos.Find(ctx, id), ...
+// Videos is the entry point for the videos table (Video):
+// Videos.Query(), Videos.Find(ctx, id), Videos.Where(Videos.ID...) ...
 var Videos = VideosSchema{
 	Table: videosTable,
 	ID:    orm.NewColumn(videosTable, "id", func(m *Video) *int64 { return &m.ID }),
