@@ -86,6 +86,12 @@ func (s Scalar[M, V]) JSONContains(v any) Cond[M] {
 // JSONDoesntContain is whereJsonDoesntContain.
 func (s Scalar[M, V]) JSONDoesntContain(v any) Cond[M] { return Not(s.JSONContains(v)) }
 
+// JSONOverlaps is whereJsonOverlaps: the JSON array column and vs share at
+// least one element.
+func (s Scalar[M, V]) JSONOverlaps(vs ...any) Cond[M] {
+	return Cond[M]{func(b *SQL) { b.Dialect.JSONOverlaps(b, s, vs) }}
+}
+
 // JSONHasKey is whereJsonContainsKey: Users.Settings.JSONHasKey("theme").
 func (s Scalar[M, V]) JSONHasKey(path ...string) Cond[M] {
 	return Cond[M]{func(b *SQL) { b.Dialect.JSONHasKey(b, s, path) }}

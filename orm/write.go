@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -85,7 +86,7 @@ func (q Query[M]) performInsert(ctx context.Context, m *M) error {
 	}
 	switch {
 	case autoKey && c.Dialect.Returning():
-		rows, err := q.query(ctx, stmt)
+		rows, err := q.queryWrite(ctx, stmt)
 		if err != nil {
 			return err
 		}
@@ -539,6 +540,50 @@ func (q Query[M]) Insert(ctx context.Context, ms ...M) error {
 // InsertOrIgnore bulk-inserts, skipping rows that violate unique constraints.
 func (q Query[M]) InsertOrIgnore(ctx context.Context, ms ...M) error {
 	return q.insertRows(ctx, "", true, nil, nil, ms)
+}
+
+// InsertGetID inserts one row as-is and returns the database-generated
+// key (insertGetId); the table needs an auto-increment primary key.
+func (q Query[M]) InsertGetID(ctx context.Context, m M) (int64, error) {
+	t := q.table
+	if t.PrimaryKey == "" || t.KeyType != KeyAutoIncrement {
+		return 0, fmt.Errorf("orm: table %s has no auto-increment primary key", t.Name)
+	}
+	if !isZero(t.key(&m)) {
+		return 0, fmt.Errorf("orm: InsertGetID called with a key already set on %s", t.Name)
+	}
+	cols := slices.DeleteFunc(slices.Clone(t.Columns), func(c string) bool { return c == t.PrimaryKey })
+	c, err := q.conn(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := func(b *SQL) {
+		q.renderInsert(b, "INSERT", cols, []*M{&m})
+		if c.Dialect.Returning() {
+			b.Write(" RETURNING ")
+			b.Ident(t.PrimaryKey)
+		}
+	}
+	if c.Dialect.Returning() {
+		rows, err := q.queryWrite(ctx, stmt)
+		if err != nil {
+			return 0, err
+		}
+		defer rows.Close()
+		if rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return 0, err
+			}
+			return id, rows.Err()
+		}
+		return 0, rows.Err()
+	}
+	res, err := q.exec(ctx, stmt)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }
 
 // Upsert inserts rows or updates the update columns (default: all others)

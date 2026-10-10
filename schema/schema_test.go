@@ -329,3 +329,92 @@ func render(d orm.Dialect, q string) (string, struct{}) {
 	}
 	return b.String(), struct{}{}
 }
+
+func TestSeeders(t *testing.T) {
+	ctx, b := setup(t)
+	check(t, b.Create(ctx, "widgets", func(t *Blueprint) {
+		t.ID()
+		t.String("name")
+	}))
+
+	ran := 0
+	widgets := func() string {
+		c, err := orm.Connection(ctx, orm.DefaultConnection)
+		check(t, err)
+		rows, err := c.DB.QueryContext(ctx, "SELECT name FROM widgets ORDER BY id")
+		check(t, err)
+		defer rows.Close()
+		var names []string
+		for rows.Next() {
+			var n string
+			check(t, rows.Scan(&n))
+			names = append(names, n)
+		}
+		check(t, rows.Err())
+		return strings.Join(names, "\n")
+	}
+	RegisterSeeder(Seeder{
+		Name: "Widgets",
+		Run: func(ctx context.Context) error {
+			ran++
+			if err := orm.From("widgets").Insert(ctx, map[string]any{"name": fmt.Sprintf("widget %d", ran)}); err != nil {
+				return err
+			}
+			return nil
+		},
+	})
+
+	names, err := Seed(ctx)
+	check(t, err)
+	want(t, "seed ran all", names, []string{"Widgets"})
+	want(t, "seeded a row", widgets(), "widget 1")
+
+	if _, err = Seed(ctx, "Nope"); err == nil || !strings.Contains(err.Error(), "no seeder") {
+		t.Errorf("unknown seeder should error, got %v", err)
+	}
+	names, err = Seed(ctx, "Widgets")
+	check(t, err)
+	want(t, "seed ran one", names, []string{"Widgets"})
+
+	// A failing seeder rolls back its transaction and stops the run.
+	RegisterSeeder(Seeder{
+		Name: "Broken",
+		Run:  func(context.Context) error { return errors.New("boom") },
+	})
+	_, err = Seed(ctx, "Widgets", "Broken")
+	want(t, "seed error", err != nil && strings.Contains(err.Error(), "seeding Broken"), true)
+	want(t, "rows before failure kept", widgets(), "widget 1\nwidget 2\nwidget 3")
+
+	var out bytes.Buffer
+	check(t, Run(ctx, &Migrator{}, []string{"db:seed", "-class", "Widgets"}, &out))
+	want(t, "db:seed output", strings.Contains(out.String(), "Seeded"), true)
+	want(t, "db:seed class filter", strings.Contains(out.String(), "Widgets"), true)
+	want(t, "db:seed class only", strings.Contains(out.String(), "Broken"), false)
+}
+
+func TestMakeScaffolds(t *testing.T) {
+	ctx := context.Background()
+	m := &Migrator{}
+	dir := t.TempDir()
+	var out bytes.Buffer
+
+	check(t, Run(ctx, m, []string{"make:seeder", "User", "-dir", dir, "-package", "seeders"}, &out))
+	src, err := os.ReadFile(filepath.Join(dir, "user_seeder.go"))
+	check(t, err)
+	want(t, "seeder scaffold", strings.Contains(string(src), `schema.RegisterSeeder(schema.Seeder{
+		Name: "User",`) && strings.Contains(string(src), "package seeders"), true)
+
+	out.Reset()
+	check(t, Run(ctx, m, []string{"make:model", "LineItem", "-dir", dir, "-package", "models"}, &out))
+	src, err = os.ReadFile(filepath.Join(dir, "line_item.go"))
+	check(t, err)
+	want(t, "model scaffold",
+		strings.Contains(string(src), "//orm:table line_items") &&
+			strings.Contains(string(src), "type LineItem struct") &&
+			strings.Contains(string(src), "orm.Model"), true)
+
+	out.Reset()
+	check(t, Run(ctx, m, []string{"make:migration", "create_flights_table", "-dir", dir}, &out))
+	files, _ := filepath.Glob(filepath.Join(dir, "*_create_flights_table.go"))
+	want(t, "make:migration alias", len(files), 1)
+}

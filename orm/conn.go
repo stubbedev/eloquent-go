@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,8 +22,64 @@ type DB interface {
 
 // Conn is a registered connection: a handle plus the dialect its SQL is rendered in.
 type Conn struct {
-	DB      DB
+	DB DB // used for every statement unless Read is set
+	// Read is an optional second pool that SELECTs are routed to
+	// (Laravel's read/write connection split).
+	Read    DB
 	Dialect Dialect
+}
+
+// Reader returns the handle queries run on: Read when the connection has a
+// separate read pool, DB otherwise. Writes always go through DB.
+func (c Conn) Reader() DB {
+	if c.Read != nil {
+		return c.Read
+	}
+	return c.DB
+}
+
+// stickyState tracks which connections have been written to inside one
+// orm.Sticky scope.
+type stickyState struct {
+	mu    sync.Mutex
+	wrote map[string]bool
+}
+
+type stickyKey struct{}
+
+// Sticky returns a ctx with Laravel's "sticky" read/write behaviour: after
+// the first write to a connection that has a separate read pool, every later
+// read in the same ctx runs on the write pool, so a request reads back its
+// own writes despite replication lag. Call it once where a request's ctx is
+// created (HTTP middleware is the usual place); routing from there is
+// automatic, including writes inside orm.Transaction. Without it, reads
+// always use the read pool and only transactions read their own writes.
+func Sticky(ctx context.Context) context.Context {
+	return context.WithValue(ctx, stickyKey{}, &stickyState{wrote: map[string]bool{}})
+}
+
+// markWritten records that a statement wrote to conn in the ctx's sticky
+// scope, if there is one.
+func markWritten(ctx context.Context, conn string) {
+	if st, ok := ctx.Value(stickyKey{}).(*stickyState); ok {
+		st.mu.Lock()
+		st.wrote[conn] = true
+		st.mu.Unlock()
+	}
+}
+
+// stickyDB picks the handle a read runs on: the write pool when this ctx
+// already wrote to the connection, the read pool otherwise.
+func stickyDB(ctx context.Context, conn string, c Conn) DB {
+	if st, ok := ctx.Value(stickyKey{}).(*stickyState); ok {
+		st.mu.Lock()
+		wrote := st.wrote[conn]
+		st.mu.Unlock()
+		if wrote {
+			return c.DB
+		}
+	}
+	return c.Reader()
 }
 
 var (
@@ -50,6 +108,29 @@ func Open(name, driver, dsn string) (*sql.DB, error) {
 // SetDefault registers the default connection.
 func SetDefault(db DB, d Dialect) { AddConnection(DefaultConnection, db, d) }
 
+// OpenReadWrite opens two pools for one connection: SELECTs run against
+// readDSN, everything else against writeDSN (Laravel's 'read'/'write'
+// configuration). The returned *sql.DB is the write pool.
+func OpenReadWrite(name, driver, readDSN, writeDSN string) (*sql.DB, error) {
+	d, ok := DialectFor(driver)
+	if !ok {
+		return nil, fmt.Errorf("orm: no dialect known for driver %q; use AddConnection with an explicit dialect", driver)
+	}
+	read, err := sql.Open(driver, readDSN)
+	if err != nil {
+		return nil, err
+	}
+	write, err := sql.Open(driver, writeDSN)
+	if err != nil {
+		read.Close()
+		return nil, err
+	}
+	connMu.Lock()
+	conns[name] = Conn{DB: write, Read: read, Dialect: d}
+	connMu.Unlock()
+	return write, nil
+}
+
 // AddConnection registers a named connection, used by tables declared with
 // //orm:table <name> connection=<conn> and by Query.On(<conn>).
 func AddConnection(name string, db DB, d Dialect) {
@@ -76,6 +157,33 @@ type txKey struct{ conn string }
 
 // TransactionOn is Transaction for a named connection.
 func TransactionOn(ctx context.Context, name string, fn func(ctx context.Context) error) (err error) {
+	return TransactionAttemptsOn(ctx, name, 1, fn)
+}
+
+// RetryingTransaction is Transaction that re-runs fn when the database
+// reports a deadlock or lock timeout, up to attempts times in total
+// (DB::transaction's $attempts). Nested calls are never retried.
+func RetryingTransaction(ctx context.Context, attempts int, fn func(ctx context.Context) error) error {
+	return TransactionAttemptsOn(ctx, DefaultConnection, attempts, fn)
+}
+
+// RetryingTransactionOn is RetryingTransaction for a named connection.
+func RetryingTransactionOn(ctx context.Context, name string, attempts int, fn func(ctx context.Context) error) error {
+	return TransactionAttemptsOn(ctx, name, attempts, fn)
+}
+
+// TransactionAttemptsOn runs fn in a transaction, retrying on deadlock.
+func TransactionAttemptsOn(ctx context.Context, name string, attempts int, fn func(ctx context.Context) error) error {
+	for {
+		err := TransactionOnce(ctx, name, fn)
+		if err == nil || attempts <= 1 || !IsDeadlock(err) {
+			return err
+		}
+		attempts--
+	}
+}
+
+func TransactionOnce(ctx context.Context, name string, fn func(ctx context.Context) error) (err error) {
 	if st, ok := ctx.Value(txKey{name}).(*txState); ok {
 		return savepoint(ctx, name, st, fn)
 	}
@@ -190,13 +298,71 @@ func Listen(fn func(QueryEvent)) (stop func()) {
 	}
 }
 
-// Emit reports an executed statement to listeners (used by the schema package too).
+// Emit reports an executed statement to listeners and, when enabled, the
+// query log (used by the schema package too).
 func Emit(e QueryEvent) {
+	if logEnabled.Load() {
+		logMu.Lock()
+		queryLogEvents = append(queryLogEvents, e)
+		logMu.Unlock()
+	}
 	listenMu.RLock()
 	defer listenMu.RUnlock()
 	for _, fn := range listeners {
 		fn(e)
 	}
+}
+
+var (
+	logMu          sync.Mutex
+	logEnabled     atomic.Bool
+	queryLogEvents []QueryEvent
+)
+
+// EnableQueryLog starts recording every executed statement
+// (DB::enableQueryLog).
+func EnableQueryLog() {
+	logMu.Lock()
+	queryLogEvents = nil
+	logMu.Unlock()
+	logEnabled.Store(true)
+}
+
+// DisableQueryLog stops recording (DB::disableQueryLog).
+func DisableQueryLog() { logEnabled.Store(false) }
+
+// QueryLog returns the statements recorded since the log was enabled or
+// flushed (DB::getQueryLog).
+func QueryLog() []QueryEvent {
+	logMu.Lock()
+	defer logMu.Unlock()
+	return slices.Clone(queryLogEvents)
+}
+
+// FlushQueryLog clears the log (DB::flushQueryLog).
+func FlushQueryLog() {
+	logMu.Lock()
+	queryLogEvents = nil
+	logMu.Unlock()
+}
+
+// IsDeadlock reports whether err is a deadlock or lock timeout on SQLite,
+// Postgres or MySQL/MariaDB — the conditions DB::transaction retries on.
+func IsDeadlock(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, s := range []string{
+		"SQLSTATE 40P01", "SQLSTATE 40001", "Error 1213",
+		"Deadlock found when trying to get lock", "Lock wait timeout exceeded",
+		"database is locked",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsUniqueViolation reports whether err is a unique constraint violation

@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/stubbedev/eloquent-go/orm"
 )
 
 // Run implements an artisan-style migration CLI. A project's cmd/migrate is:
@@ -24,24 +27,30 @@ import (
 // Commands:
 //
 //	migrate [-step] [-pretend]   run pending migrations
-//	rollback [-step N]           revert the last batch (or N migrations)
-//	reset                        revert all migrations
-//	refresh                      reset, then migrate
-//	fresh                        drop all tables, then migrate
-//	wipe                         drop all tables (db:wipe)
-//	status                       list migrations and whether they ran
-//	make <name> [-dir migrations] [-package migrations]
-//	                             scaffold a migration file
+//	rollback [-steps N]           revert the last batch (or N migrations)
+//	reset                         revert all migrations
+//	refresh [-seed]               reset, then migrate (and seed)
+//	fresh [-seed]                 drop all tables, migrate (and seed)
+//	wipe                          drop all tables (db:wipe)
+//	status                        list migrations and whether they ran
+//	db:seed [-class X]            run every seeder (or just X)
+//	make <name>                   scaffold a migration file
+//	make:migration <name>         scaffold a migration file
+//	make:seeder <name>            scaffold a seeder file
+//	make:model <name>             scaffold a model struct
 func Run(ctx context.Context, m *Migrator, args []string, out io.Writer) error {
 	if len(args) == 0 {
 		args = []string{"migrate"}
 	}
 	cmd, rest := strings.TrimPrefix(args[0], "migrate:"), args[1:]
+	head, sub, _ := strings.Cut(cmd, ":")
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(out)
 	step := fs.Bool("step", false, "run each migration in its own batch")
 	pretend := fs.Bool("pretend", false, "print the SQL instead of running it")
 	steps := fs.Int("steps", 0, "number of migrations to roll back")
+	seed := fs.Bool("seed", false, "run seeders after migrating")
+	class := fs.String("class", "", "run only this seeder")
 	dir := fs.String("dir", "migrations", "directory for new migrations")
 	pkg := fs.String("package", "migrations", "package name for new migrations")
 	database := fs.String("database", "", "connection holding the migrations table")
@@ -71,7 +80,16 @@ func Run(ctx context.Context, m *Migrator, args []string, out io.Writer) error {
 		return err
 	}
 
-	switch cmd {
+	seedConn := cmp.Or(m.conn(), orm.DefaultConnection)
+	if *database != "" {
+		seedConn = *database
+	}
+	var names []string
+	if *class != "" {
+		names = []string{*class}
+	}
+
+	switch head {
 	case "migrate":
 		if *pretend {
 			sqls, err := m.Pretend(ctx)
@@ -80,20 +98,32 @@ func Run(ctx context.Context, m *Migrator, args []string, out io.Writer) error {
 			}
 			return err
 		}
-		names, err := m.Migrate(ctx, *step)
-		return report("Migrated", names, err)
+		ran, err := m.Migrate(ctx, *step)
+		report("Migrated", ran, err)
+		if err != nil || !*seed {
+			return err
+		}
+		return SeedReportOn(ctx, out, seedConn, names...)
 	case "rollback":
-		names, err := m.Rollback(ctx, *steps)
-		return report("Rolled back", names, err)
+		ran, err := m.Rollback(ctx, *steps)
+		return report("Rolled back", ran, err)
 	case "reset":
-		names, err := m.Reset(ctx)
-		return report("Rolled back", names, err)
+		ran, err := m.Reset(ctx)
+		return report("Rolled back", ran, err)
 	case "refresh":
-		names, err := m.Refresh(ctx)
-		return report("Migrated", names, err)
+		ran, err := m.Refresh(ctx)
+		report("Migrated", ran, err)
+		if err != nil || !*seed {
+			return err
+		}
+		return SeedReportOn(ctx, out, seedConn, names...)
 	case "fresh":
-		names, err := m.Fresh(ctx)
-		return report("Migrated", names, err)
+		ran, err := m.Fresh(ctx)
+		report("Migrated", ran, err)
+		if err != nil || !*seed {
+			return err
+		}
+		return SeedReportOn(ctx, out, seedConn, names...)
 	case "wipe":
 		if err := On(m.conn()).DropAllTables(ctx); err != nil {
 			return err
@@ -110,11 +140,29 @@ func Run(ctx context.Context, m *Migrator, args []string, out io.Writer) error {
 			fmt.Fprintf(out, "%-10s %s\n", state, s.Name)
 		}
 		return err
+	case "db":
+		if sub != "seed" {
+			return fmt.Errorf("unknown db command %q", sub)
+		}
+		return SeedReportOn(ctx, out, seedConn, names...)
 	case "make":
 		if len(positional) != 1 {
-			return fmt.Errorf("usage: make <name>")
+			return fmt.Errorf("usage: %s <name>", cmd)
 		}
-		path, err := MakeMigration(*dir, *pkg, positional[0], time.Now())
+		var (
+			path string
+			err  error
+		)
+		switch sub {
+		case "", "migration":
+			path, err = MakeMigration(*dir, *pkg, positional[0], time.Now())
+		case "seeder":
+			path, err = MakeSeeder(*dir, *pkg, positional[0])
+		case "model":
+			path, err = MakeModel(*dir, *pkg, positional[0])
+		default:
+			return fmt.Errorf("unknown make command %q", sub)
+		}
 		if err == nil {
 			fmt.Fprintln(out, "Created", path)
 		}

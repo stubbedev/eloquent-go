@@ -3,8 +3,10 @@
 //	go run ./example/migrate                 # migrate
 //	go run ./example/migrate status
 //	go run ./example/migrate rollback -steps 1
-//	go run ./example/migrate fresh
+//	go run ./example/migrate fresh -seed
 //	go run ./example/migrate make create_flights_table -dir example/migrations
+//	go run ./example/migrate make:seeder Users -dir example/migrations
+//	go run ./example/migrate db:seed
 //
 // It uses SQLite files by default; set DB_DRIVER, DB_DSN and DB_AUDIT_DSN
 // to target Postgres ("pgx") or MySQL ("mysql").

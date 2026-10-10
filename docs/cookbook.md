@@ -104,6 +104,19 @@ and `driver.Valuer` works as a cast. **Accessors and mutators** are ordinary
 Go methods, and **serialization** uses `encoding/json` tags (`json:"-"` hides
 a field).
 
+```go
+// Encrypted columns (Laravel's 'encrypted' / 'encrypted:array' casts):
+// AES-256-GCM of the JSON encoding, keyed by orm.SetEncryptionKey.
+orm.SetEncryptionKey([]byte(os.Getenv("APP_KEY")))
+// ApiToken orm.Encrypted[map[string]string] `db:"api_token"`
+
+// Hashed passwords (the 'hashed' cast): assigning a plain password
+// bcrypt-hashes it on write; an already-hashed value is stored as-is.
+// Password orm.Hashed `db:"password"`
+u.Password = "secret"
+u.Password.Matches("secret") // verify
+```
+
 ## Retrieving
 
 ```go
@@ -138,6 +151,8 @@ Posts.Where(orm.Date(Posts.CreatedAt).Eq("2026-01-10"))         // whereDate
 
 Users.Where(Users.Settings.JSON[string]("theme").Eq("dark"))    // settings->theme
 Users.Where(Users.Settings.JSON[string]("labels").JSONContains("admin"))
+Users.Where(Users.Settings.JSON[string]("labels").JSONDoesntContain("admin"))
+Users.Where(Users.Settings.JSON[string]("labels").JSONOverlaps("admin", "editor")) // whereJsonOverlaps
 Users.Where(Users.Settings.JSON[string]("labels").JSONLength().Eq(0))
 Users.Where(Users.Settings.JSONHasKey("theme"))
 
@@ -199,6 +214,8 @@ name, err := Users.Query().OrderBy(Users.Karma.Desc()).Value(ctx, Users.Name)
 ```go
 err := Posts.Query().OrderBy(Posts.ID.Asc()).Chunk(ctx, 100, func(ps []Post) error { return nil })
 err = Posts.Query().ChunkByID(ctx, 100, func(ps []Post) error { return orm.ErrStop }) // stop early
+err = Posts.Query().ChunkWhile(ctx, func(prev, cur Post) bool { return prev.UserID == cur.UserID },
+	func(ps []Post) error { return nil }) // chunkWhile, ordered by key
 
 for p, err := range Posts.Query().With(PostComments).Lazy(ctx, 500) { _, _ = p, err } // lazyById
 for p, err := range Posts.Query().Cursor(ctx) { _, _ = p, err }                       // one query, streamed
@@ -222,6 +239,7 @@ Posts.Where(Posts.ID.Eq(1)).Increment(ctx, Posts.Views, 10)
 Posts.Where(Posts.ID.Eq(1)).Decrement(ctx, Posts.Views, 1, Posts.Title.Set("edited"))
 
 Videos.Query().Insert(ctx, Video{Title: "A"}, Video{Title: "B"})   // no events / timestamps
+id, err := Videos.Query().InsertGetID(ctx, Video{Title: "C"})       // insertGetId
 Tags.Query().InsertOrIgnore(ctx, Tag{Name: "go"})
 Roles.Query().Upsert(ctx, []Role{{ID: 1, Name: "superadmin"}}, []orm.AnyColumn[Role]{Roles.ID})
 Tags.Query().InsertUsing(ctx, []orm.AnyColumn[Tag]{Tags.Name}, Roles.Query(), orm.Upper(Roles.Name))
@@ -236,6 +254,8 @@ err = Posts.Touch(ctx, &post)
 err = Posts.Refresh(ctx, &post)
 fresh, err := Posts.Fresh(ctx, &post)
 same := Posts.Is(&a, &b)
+
+fallback, err := Users.Query().FindOr(ctx, 99, func() (User, error) { return User{Name: "nobody"}, nil })
 
 err = Users.Create(orm.WithoutTimestamps(ctx), &u)
 err = Images.Truncate(ctx)
@@ -427,6 +447,10 @@ err := orm.Transaction(ctx, func(ctx context.Context) error {
 		return nil
 	})
 })
+
+// Re-run the whole transaction when the database reports a deadlock or
+// lock timeout, up to three times (DB::transaction's $attempts).
+err = orm.RetryingTransaction(ctx, 3, func(ctx context.Context) error { return Users.Save(ctx, &u) })
 ```
 
 Every query that receives the transaction's `ctx` runs inside it.
@@ -438,11 +462,46 @@ orm.Open(orm.DefaultConnection, "sqlite", "file:app.db?_time_format=sqlite")
 orm.Open("audit", "pgx", auditDSN)
 orm.AddConnection("replica", replicaDB, orm.MySQL)
 
+// Read/write split: SELECTs run against readDSN, everything else against
+// writeDSN (Laravel's read/write connection config).
+write, err := orm.OpenReadWrite(orm.DefaultConnection, "mysql", readDSN, writeDSN)
+
+// Sticky reads (Laravel's 'sticky' => true): open the scope once where the
+// request's ctx is created — middleware is the usual place — and every
+// read after the request's first write runs on the write connection for
+// the rest of the ctx, so it reads back its own writes despite lag.
+ctx := orm.Sticky(r.Context()) // in middleware, before calling the handler
+
 //orm:table audit_log connection=audit key_type=uuid timestamps=false
 AuditLog.Query().Count(ctx)               // runs on "audit"
 Users.Query().On("replica").Get(ctx)      // Model::on()
 
 sqlText, args := Users.Where(Users.Karma.Gt(10)).ToSQLFor(orm.Postgres)
+```
+
+## Queries without a model
+
+`orm.From` is `DB::table`: the same builder idea over a bare table, with
+rows as maps and no model machinery.
+
+```go
+rows, err := orm.From("users").
+	Where("active", "=", true).
+	WhereIn("country_id", 1, 2).
+	WhereNull("deleted_at").
+	WhereRaw("karma > ?", 10).
+	LeftJoin("countries", "users.country_id", "=", "countries.id").
+	OrderBy("name").
+	Limit(10).
+	Get(ctx) // []map[string]any
+
+n, err := orm.From("users").Where("email", "=", "a@b.c").Count(ctx)
+id, err := orm.From("users").InsertGetID(ctx, map[string]any{"name": "Ada", "email": "ada@example.com"})
+n, err = orm.From("users").Where("id", "=", id).Update(ctx, map[string]any{"name": "Ada L"})
+n, err = orm.From("users").Where("id", "=", id).Delete(ctx)
+err = orm.From("users").UpdateOrInsert(ctx,
+	map[string]any{"email": "ada@example.com"},
+	map[string]any{"name": "Ada L"})
 ```
 
 ## Factories
@@ -468,8 +527,18 @@ draft := UserFactory.MakeOne() // unsaved
 sqlText, args := Users.Where(Users.Name.Eq("x")).ToSQL()
 fmt.Println(Users.Where(Users.Name.Eq("O'Brien")).ToRawSQL()) // args inlined
 
+plan, err := Users.Where(Users.Karma.Gt(10)).Explain(ctx) // []map[string]any
+
 stop := orm.Listen(func(e orm.QueryEvent) { log.Println(e.Duration, e.SQL) }) // DB::listen
 defer stop()
+
+orm.EnableQueryLog()                            // DB::enableQueryLog
+must(Users.Query().Count(ctx))
+for _, e := range orm.QueryLog() {              // DB::getQueryLog
+	log.Println(e.Duration, e.SQL)
+}
+orm.FlushQueryLog()                              // DB::flushQueryLog
+orm.DisableQueryLog()
 ```
 
 Errors from the database come back as `*orm.QueryError`, which carries the
@@ -562,15 +631,46 @@ Add a `cmd/migrate` (see [`example/migrate`](../example/migrate/main.go)):
 go run ./cmd/migrate                       # migrate (also: migrate -step, migrate -pretend)
 go run ./cmd/migrate status
 go run ./cmd/migrate rollback [-steps N]
-go run ./cmd/migrate reset | refresh | fresh | wipe
+go run ./cmd/migrate reset | refresh [-seed] | fresh [-seed] | wipe
 go run ./cmd/migrate make create_flights_table -dir migrations
-go run ./cmd/migrate make add_gate_to_flights_table -dir migrations
+go run ./cmd/migrate make:seeder Users -dir seeders
+go run ./cmd/migrate make:model LineItem -dir models
+go run ./cmd/migrate db:seed [-class Users]
 ```
 
 Migrations run inside a transaction on SQLite and Postgres, so a failed
 migration leaves nothing behind. A migration with `Connection: "audit"` runs
 on that connection. `Migrator` exposes the same operations programmatically,
 for example to migrate in tests.
+
+## Seeders
+
+Seeders pair with factories to populate a migrated database. Each runs in
+its own transaction; a failing seeder stops the run.
+
+```go
+var UserFactory = orm.NewFactory(Users.Table, func(n int) User {
+	return User{Name: fmt.Sprintf("User %d", n), Email: fmt.Sprintf("user%d@example.com", n)}
+})
+
+func init() {
+	schema.RegisterSeeder(schema.Seeder{
+		Name: "Users",
+		Run: func(ctx context.Context) error {
+			_, err := UserFactory.Count(50).Create(ctx)
+			return err
+		},
+	})
+}
+
+schema.Seed(ctx)                    // every seeder
+schema.Seed(ctx, "Users")           // one
+schema.SeedOn(ctx, "analytics")     // on a named connection
+```
+
+`go run ./cmd/migrate db:seed` runs them all, `-class Users` just one, and
+`fresh -seed` / `refresh -seed` seed after migrating. `make:seeder Users`
+scaffolds the file above.
 
 ## Running the test databases
 

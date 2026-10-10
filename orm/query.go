@@ -485,9 +485,27 @@ func (q Query[M]) query(ctx context.Context, f frag) (*sql.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
+	return q.run(ctx, c, stickyDB(ctx, q.connName(), c), f)
+}
+
+// queryWrite is query for statements that read rows back but are writes,
+// like INSERT ... RETURNING: they must run on the write pool.
+func (q Query[M]) queryWrite(ctx context.Context, f frag) (*sql.Rows, error) {
+	c, err := q.conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.run(ctx, c, c.DB, f)
+	if err == nil {
+		markWritten(ctx, q.connName())
+	}
+	return rows, err
+}
+
+func (q Query[M]) run(ctx context.Context, c Conn, db DB, f frag) (*sql.Rows, error) {
 	stmt, args := render(c.Dialect, f)
 	start := time.Now()
-	rows, err := c.DB.QueryContext(ctx, stmt, args...)
+	rows, err := db.QueryContext(ctx, stmt, args...)
 	Emit(QueryEvent{Connection: q.connName(), SQL: stmt, Args: args, Duration: time.Since(start), Err: err})
 	if err != nil {
 		return nil, &QueryError{Err: err, SQL: stmt}
@@ -507,6 +525,7 @@ func (q Query[M]) exec(ctx context.Context, f frag) (sql.Result, error) {
 	if err != nil {
 		return nil, &QueryError{Err: err, SQL: stmt}
 	}
+	markWritten(ctx, q.connName())
 	return res, nil
 }
 

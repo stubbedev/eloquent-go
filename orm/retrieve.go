@@ -110,6 +110,16 @@ func (q Query[M]) Sole(ctx context.Context) (M, error) {
 // Find returns the model with the given primary key (find / findOrFail).
 func (q Query[M]) Find(ctx context.Context, id any) (M, error) { return q.WhereKey(id).First(ctx) }
 
+// FindOr returns the model with the given primary key, or the result of fn
+// when there is none (findOr).
+func (q Query[M]) FindOr(ctx context.Context, id any, fn func() (M, error)) (M, error) {
+	m, err := q.Find(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return fn()
+	}
+	return m, err
+}
+
 // FindMany returns the models with the given primary keys.
 func (q Query[M]) FindMany(ctx context.Context, ids ...any) ([]M, error) {
 	return q.WhereKey(ids...).Get(ctx)
@@ -288,6 +298,22 @@ func scalarOf[V, M any](ctx context.Context, q Query[M], f frag) (V, error) {
 	return v, rows.Err()
 }
 
+// Explain returns the database's query plan for the query as one map of
+// column name to value per row (explain()).
+func (q Query[M]) Explain(ctx context.Context) ([]map[string]any, error) {
+	q = q.prepared()
+	q.extras, q.eager = nil, nil
+	rows, err := q.query(ctx, func(b *SQL) {
+		b.Write("EXPLAIN ")
+		q.renderSelect(b, nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMaps(rows)
+}
+
 // ---------------------------------------------------------------------------
 // Chunking and iteration
 // ---------------------------------------------------------------------------
@@ -363,6 +389,36 @@ func (q Query[M]) chunksByID(ctx context.Context, size int) iter.Seq2[[]M, error
 			last = q.table.key(&models[len(models)-1])
 		}
 	}
+}
+
+// ChunkWhile processes results ordered by primary key, splitting into a
+// new chunk whenever compare is false for two consecutive rows
+// (chunkWhile). Return ErrStop from fn to stop early.
+func (q Query[M]) ChunkWhile(ctx context.Context, compare func(prev, cur M) bool, fn func([]M) error) error {
+	var batch []M
+	flush := func() error {
+		if len(batch) > 0 {
+			if err := fn(batch); err != nil {
+				return ignoreStop(err)
+			}
+			batch = nil
+		}
+		return nil
+	}
+	for models, err := range q.chunksByID(ctx, 500) {
+		if err != nil {
+			return err
+		}
+		for _, m := range models {
+			if len(batch) > 0 && !compare(batch[len(batch)-1], m) {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+			batch = append(batch, m)
+		}
+	}
+	return flush()
 }
 
 // Cursor streams rows one at a time over a single query, without eager

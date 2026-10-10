@@ -2,6 +2,7 @@ package orm
 
 import (
 	"encoding/json"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -28,6 +29,9 @@ type Dialect interface {
 	DatePart(b *SQL, part string, e AnyExpr)
 	JSONExtract(b *SQL, e AnyExpr, path []string)
 	JSONContains(b *SQL, e AnyExpr, v any)
+	// JSONOverlaps writes a test that the JSON array in e and v share an
+	// element (whereJsonOverlaps).
+	JSONOverlaps(b *SQL, e AnyExpr, v any)
 	JSONLength(b *SQL, e AnyExpr)
 	JSONHasKey(b *SQL, e AnyExpr, path []string)
 	// FullText writes a full text match of term against exprs (whereFullText).
@@ -142,6 +146,14 @@ func (sqliteDialect) JSONContains(b *SQL, e AnyExpr, v any) {
 	b.Write(") END")
 }
 
+func (sqliteDialect) JSONOverlaps(b *SQL, e AnyExpr, v any) {
+	b.Write("EXISTS (SELECT 1 FROM json_each(")
+	e.build(b)
+	b.Write(") WHERE value IN (")
+	writeList(b, v)
+	b.Write("))")
+}
+
 // ---------------------------------------------------------------------------
 
 type postgresDialect struct{}
@@ -190,6 +202,14 @@ func (postgresDialect) JSONContains(b *SQL, e AnyExpr, v any) {
 	b.Write(")::jsonb @> ")
 	b.Arg(string(enc))
 	b.Write("::jsonb")
+}
+
+func (postgresDialect) JSONOverlaps(b *SQL, e AnyExpr, v any) {
+	b.Write("(")
+	e.build(b)
+	b.Write(")::jsonb ?| ARRAY[")
+	writeList(b, v)
+	b.Write("]::text[]")
 }
 
 func (postgresDialect) JSONHasKey(b *SQL, e AnyExpr, path []string) {
@@ -287,6 +307,15 @@ func (mysqlDialect) JSONContains(b *SQL, e AnyExpr, v any) {
 	b.Write(")")
 }
 
+func (mysqlDialect) JSONOverlaps(b *SQL, e AnyExpr, v any) {
+	enc, _ := json.Marshal(v)
+	b.Write("JSON_OVERLAPS(")
+	e.build(b)
+	b.Write(", ")
+	b.Arg(string(enc))
+	b.Write(")")
+}
+
 func (mysqlDialect) JSONLength(b *SQL, e AnyExpr) { fn(b, "JSON_LENGTH", e) }
 
 func (mysqlDialect) JSONHasKey(b *SQL, e AnyExpr, path []string) {
@@ -366,3 +395,19 @@ func fn(b *SQL, name string, e AnyExpr) {
 func doubleQuote(id string) string { return `"` + strings.ReplaceAll(id, `"`, `""`) + `"` }
 
 func jsonPath(path []string) string { return "$." + strings.Join(path, ".") }
+
+// writeList writes v (a slice or a single value) as a comma-separated list
+// of bound arguments.
+func writeList(b *SQL, v any) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
+		for i := 0; i < rv.Len(); i++ {
+			if i > 0 {
+				b.Write(", ")
+			}
+			b.Arg(rv.Index(i).Interface())
+		}
+		return
+	}
+	b.Arg(v)
+}
