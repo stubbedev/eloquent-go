@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -54,6 +55,27 @@ func (s *QdrantStore) WithKey(col string) *QdrantStore {
 	return s
 }
 
+// qdrantHTTPError is a non-2xx REST response, kept typed so callers match
+// on the status instead of the message text.
+type qdrantHTTPError struct {
+	method string
+	path   string
+	status int
+	body   string
+}
+
+func (e *qdrantHTTPError) Error() string {
+	return fmt.Sprintf("orm: qdrant %s %s: %d: %s", e.method, e.path, e.status, e.body)
+}
+
+// qdrantStatus reports err's HTTP status when err is a Qdrant REST error.
+func qdrantStatus(err error) (int, bool) {
+	if e, ok := errors.AsType[*qdrantHTTPError](err); ok {
+		return e.status, true
+	}
+	return 0, false
+}
+
 // EnsureCollection creates the collection if it is missing, with the
 // given vector size and distance metric — the migration equivalent for
 // Qdrant. Vector columns must match this size.
@@ -65,7 +87,7 @@ func (s *QdrantStore) EnsureCollection(ctx context.Context, table string, dim in
 		},
 	}
 	err := s.do(ctx, http.MethodPut, "/collections/"+table, body, nil)
-	if err != nil && strings.Contains(err.Error(), "409") {
+	if status, ok := qdrantStatus(err); ok && status == http.StatusConflict {
 		return nil // already exists
 	}
 	return err
@@ -74,7 +96,7 @@ func (s *QdrantStore) EnsureCollection(ctx context.Context, table string, dim in
 // DropCollection removes a collection (dropIfExists in a migration).
 func (s *QdrantStore) DropCollection(ctx context.Context, table string) error {
 	err := s.do(ctx, http.MethodDelete, "/collections/"+table, nil, nil)
-	if err != nil && (strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "Not found")) {
+	if status, ok := qdrantStatus(err); ok && status == http.StatusNotFound {
 		return nil
 	}
 	return err
@@ -101,7 +123,7 @@ func (s *QdrantStore) do(ctx context.Context, method, path string, body any, out
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
 		b, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("orm: qdrant %s %s: %s: %s", method, path, res.Status, b)
+		return &qdrantHTTPError{method: method, path: path, status: res.StatusCode, body: string(b)}
 	}
 	if out != nil {
 		return json.NewDecoder(res.Body).Decode(out)

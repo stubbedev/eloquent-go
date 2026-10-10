@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // DocStore is a non-SQL backend behind the same builder: MongoDB and Qdrant
@@ -124,7 +125,9 @@ func (q Query[M]) findDocs(ctx context.Context) ([]M, error) {
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	docs, err := ds.FindDocs(ctx, q.table.Name, p)
+	emitDoc(q.connName(), "find", p, time.Since(start), err)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +155,9 @@ func (q Query[M]) countDocs(ctx context.Context) (int64, bool, error) {
 	if err != nil {
 		return 0, true, err
 	}
+	start := time.Now()
 	n, err := ds.CountDocs(ctx, q.table.Name, p)
+	emitDoc(q.connName(), "count", p, time.Since(start), err)
 	return n, true, err
 }
 
@@ -183,7 +188,10 @@ func (q Query[M]) writeDocs(ctx context.Context, method string, models []*M) err
 	if err != nil {
 		return err
 	}
-	return ds.InsertDocs(ctx, q.table.Name, docs)
+	start := time.Now()
+	err = ds.InsertDocs(ctx, q.table.Name, docs)
+	emitDocRaw(q.connName(), fmt.Sprintf("insert %s (%d documents)", q.table.Name, len(docs)), time.Since(start), err)
+	return err
 }
 
 // insertOrIgnoreDocs inserts only the documents whose key combination is
@@ -243,7 +251,9 @@ func (q Query[M]) updateDocs(ctx context.Context, sets []Assignment[M], method s
 		}
 		values[a.col] = a.raw
 	}
+	start := time.Now()
 	n, err := ds.UpdateDocs(ctx, q.table.Name, p, values)
+	emitDoc(q.connName(), "update", p, time.Since(start), err)
 	return n, true, err
 }
 
@@ -256,7 +266,9 @@ func (q Query[M]) deleteDocs(ctx context.Context, method string) (int64, bool, e
 	if err != nil {
 		return 0, true, err
 	}
+	start := time.Now()
 	n, err := ds.DeleteDocs(ctx, q.table.Name, p)
+	emitDoc(q.connName(), "delete", p, time.Since(start), err)
 	return n, true, err
 }
 
@@ -309,4 +321,94 @@ func hydrate[M any](t *Table[M], doc map[string]any) (M, error) {
 		}
 	}
 	return m, nil
+}
+
+// emitDoc reports a document-store operation to listeners and the query
+// log, the same funnel SQL statements go through; the SQL field carries a
+// readable rendering of the plan.
+func emitDoc(conn, op string, p Plan, d time.Duration, err error) {
+	emitDocRaw(conn, planSummary(op, p), d, err)
+}
+
+func emitDocRaw(conn, summary string, d time.Duration, err error) {
+	Emit(QueryEvent{Connection: conn, SQL: summary, Duration: d, Err: err})
+}
+
+// planSummary renders a plan deterministically: find documents where
+// (views > 1) order by views desc limit 10.
+func planSummary(op string, p Plan) string {
+	var b strings.Builder
+	b.WriteString(op)
+	b.WriteString(" ")
+	b.WriteString(p.Table)
+	if p.Where != nil {
+		b.WriteString(" where ")
+		writeNode(&b, p.Where)
+	}
+	if p.Vector != nil {
+		b.WriteString(" nearest ")
+		b.WriteString(p.Vector.Column)
+	}
+	for _, o := range p.Orders {
+		b.WriteString(" order by ")
+		b.WriteString(o.Column)
+		if o.Desc {
+			b.WriteString(" desc")
+		}
+	}
+	if p.Limit > 0 {
+		fmt.Fprintf(&b, " limit %d", p.Limit)
+	}
+	if p.Offset > 0 {
+		fmt.Fprintf(&b, " offset %d", p.Offset)
+	}
+	return b.String()
+}
+
+func writeNode(b *strings.Builder, n Node) {
+	switch c := n.(type) {
+	case Field:
+		fmt.Fprintf(b, "%s %s %s", c.Column, strings.ToLower(c.Op), fmt.Sprint(c.Value))
+	case List:
+		if c.Not {
+			b.WriteString("not ")
+		}
+		fmt.Fprintf(b, "%s in [%s]", c.Column, joinValues(c.Values))
+	case Range:
+		if c.Not {
+			b.WriteString("not ")
+		}
+		fmt.Fprintf(b, "%s between %s and %s", c.Column, fmt.Sprint(c.Lo), fmt.Sprint(c.Hi))
+	case NullTest:
+		if c.Not {
+			fmt.Fprintf(b, "%s is not null", c.Column)
+		} else {
+			fmt.Fprintf(b, "%s is null", c.Column)
+		}
+	case Composite:
+		sep := " and "
+		if c.Or {
+			sep = " or "
+		}
+		for i, p := range c.Parts {
+			if i > 0 {
+				b.WriteString(sep)
+			}
+			b.WriteString("(")
+			writeNode(b, p)
+			b.WriteString(")")
+		}
+	case Negate:
+		b.WriteString("not (")
+		writeNode(b, c.Part)
+		b.WriteString(")")
+	}
+}
+
+func joinValues(vs []any) string {
+	parts := make([]string, len(vs))
+	for i, v := range vs {
+		parts[i] = fmt.Sprint(v)
+	}
+	return strings.Join(parts, ", ")
 }

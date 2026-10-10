@@ -285,6 +285,10 @@ func TestMongo(t *testing.T) {
 	eq(t, "table query", len(rows), 3)
 	eq(t, "table query values", fmt.Sprint(rows[0]["views"]), "2")
 	eq(t, "table count", must(orm.From("documents").On("mongo").Where("title", "=", "renamed").Count(ctx)), int64(1))
+	eq(t, "table orWhere", must(orm.From("documents").On("mongo").
+		Where("views", ">=", 10).OrWhere("title", "=", "renamed").Count(ctx)), int64(2))
+	eq(t, "table orWhere", must(orm.From("documents").On("mongo").
+		Where("views", ">=", 10).OrWhere("title", "=", "renamed").Count(ctx)), int64(2))
 
 	eq(t, "delete", must(Docs.Query().On("mongo").Where(Docs.Title.Eq("renamed")).Delete(ctx)), int64(1))
 	eq(t, "deleted", must(Docs.Query().On("mongo").Count(ctx)), int64(2))

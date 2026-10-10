@@ -33,7 +33,7 @@ type RowQuery struct {
 	joins    []frag
 	where    []func(*SQL)
 	nodes    []Node // document-store form of where, when translatable
-	badNode  bool   // set by clauses with no document form (WhereRaw, OrWhere)
+	badNode  bool   // set by clauses with no document form (WhereRaw)
 	orders   []frag
 	ordCols  []PlanOrder
 	limit    int
@@ -91,7 +91,11 @@ func (r RowQuery) OrWhere(col, op string, v any) RowQuery {
 		second[0](b)
 		b.Write(")")
 	}}
-	r.badNode = true
+	// (accumulated ANDs) OR this condition, in the document-store form too.
+	r.nodes = []Node{Composite{Or: true, Parts: []Node{
+		Composite{Parts: r.nodes},
+		Field{Column: col, Op: op, Value: v},
+	}}}
 	return r
 }
 
@@ -306,7 +310,7 @@ func (r RowQuery) plan() (Plan, error) {
 		return Plan{}, &ErrNotTranslatable{Reason: "distinct"}
 	}
 	if r.badNode {
-		return Plan{}, &ErrNotTranslatable{Reason: "whereRaw / orWhere"}
+		return Plan{}, &ErrNotTranslatable{Reason: "whereRaw"}
 	}
 	p := Plan{Table: r.name, Columns: r.selects, Orders: r.ordCols, Limit: r.limit, Offset: r.offset}
 	if len(r.nodes) > 0 {
@@ -324,7 +328,10 @@ func (r RowQuery) Get(ctx context.Context) ([]map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("orm: query on %s: %w", r.name, err)
 		}
-		return ds.FindDocs(ctx, r.name, p)
+		start := time.Now()
+		docs, err := ds.FindDocs(ctx, r.name, p)
+		emitDoc(cmp.Or(r.conn, DefaultConnection), "find", p, time.Since(start), err)
+		return docs, err
 	}
 	rows, err := r.run(ctx, nil)
 	if err != nil {
@@ -365,7 +372,10 @@ func (r RowQuery) Count(ctx context.Context) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		return ds.CountDocs(ctx, r.name, p)
+		start := time.Now()
+		n, err := ds.CountDocs(ctx, r.name, p)
+		emitDoc(cmp.Or(r.conn, DefaultConnection), "count", p, time.Since(start), err)
+		return n, err
 	}
 	r.selects, r.distinct, r.rawSel, r.orders, r.limit, r.offset = nil, false, "COUNT(*)", nil, 0, 0
 	var n int64
@@ -398,7 +408,10 @@ func (r RowQuery) Insert(ctx context.Context, ms ...map[string]any) error {
 	if ds, ok, err := r.docConn(ctx); err != nil {
 		return err
 	} else if ok {
-		return ds.InsertDocs(ctx, r.name, ms)
+		start := time.Now()
+		err = ds.InsertDocs(ctx, r.name, ms)
+		emitDocRaw(cmp.Or(r.conn, DefaultConnection), fmt.Sprintf("insert %s (%d documents)", r.name, len(ms)), time.Since(start), err)
+		return err
 	}
 	_, err := r.insert(ctx, ms)
 	return err
@@ -514,7 +527,10 @@ func (r RowQuery) Update(ctx context.Context, m map[string]any) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		return ds.UpdateDocs(ctx, r.name, p, m)
+		start := time.Now()
+		n, err := ds.UpdateDocs(ctx, r.name, p, m)
+		emitDoc(cmp.Or(r.conn, DefaultConnection), "update", p, time.Since(start), err)
+		return n, err
 	}
 	res, err := r.exec(ctx, func(b *SQL) {
 		b.Write("UPDATE ")
@@ -578,7 +594,10 @@ func (r RowQuery) Delete(ctx context.Context) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		return ds.DeleteDocs(ctx, r.name, p)
+		start := time.Now()
+		n, err := ds.DeleteDocs(ctx, r.name, p)
+		emitDoc(cmp.Or(r.conn, DefaultConnection), "delete", p, time.Since(start), err)
+		return n, err
 	}
 	res, err := r.exec(ctx, func(b *SQL) {
 		b.Write("DELETE FROM ")

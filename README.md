@@ -354,11 +354,14 @@ err = Events.Query().Where(Events.Kind.Eq("click")).Update(ctx, Events.Kind.Set(
 
 What translates: `Where` (comparisons, `In`, `Between`, null tests,
 `And` / `Or` / `Not`), `OrderBy` on columns, `Limit` / `Offset`, `Select`,
-and the model lifecycle — `Create`, `Save` (dirty columns only), `Delete`,
-soft deletes, events, `Count`, `Exists`, pagination, and `orm.From(...)`
-table queries. Keys must be UUID, ULID or manual. What refuses, with a
-precise error naming the part (`orm.IsNotTranslatable`): joins, unions,
-`groupBy`, raw fragments, subqueries, aggregates and `Increment`.
+`Upsert` and `InsertOrIgnore`, and the model lifecycle — `Create`, `Save`
+(dirty columns only), `Delete`, soft deletes, events, `Count`, `Exists`,
+pagination, and `orm.From(...)` table queries. Keys must be UUID, ULID or
+manual (assigned automatically when missing). Every operation reaches
+`orm.Listen` and the query log with a readable rendering of the plan. What
+refuses, with a precise error naming the part (`orm.IsNotTranslatable`):
+joins, unions, `groupBy`, raw fragments, subqueries, aggregates and
+`Increment`.
 
 **Qdrant** is the vector native: collections are tables, payload fields are
 the columns, and an `orm.Vector` column becomes the collection's vector —
@@ -458,6 +461,21 @@ remains the cast for plain JSON columns, and any `sql.Scanner` /
 | Foreign keys, `constrained`, `cascadeOnDelete`, `dropConstrainedForeignId` | same names |
 | `getColumns`, `getIndexes`, `getForeignKeys`, `getTables` | same names |
 | `migrate`, `rollback`, `reset`, `refresh`, `fresh`, `status`, `--step`, `--pretend`, `make:migration`, `db:wipe`, `db:seed`, `make:seeder`, `make:model` | `schema.Run` commands and `Migrator` methods |
+
+## Engines
+
+Every engine runs the same builder; the matrix shows where behaviour
+legitimately differs.
+
+| Engine | Notes |
+|---|---|
+| SQLite | in-memory or file; JSON1 for JSON columns |
+| Postgres (pgvector) | full parity plus `orm.Vector` columns with HNSW indexes (`t.HnswIndex`) |
+| MySQL 8 / MariaDB | `DISTANCE()` vector ordering (HeatWave); fulltext and spatial indexes |
+| DuckDB | embedded OLAP; `orm.From("read_csv('f.csv')")` queries flat files; auto-increment via sequences |
+| ClickHouse | `Update`/`Delete` are synchronous mutations that report 0 affected rows; no transactions or generated integer keys |
+| MongoDB | document store: the typed builder translates; joins, unions, subqueries and raw SQL refuse with `orm.ErrNotTranslatable`; keys are uuid/ulid/manual |
+| Qdrant | vector store: collections are tables, `Nearest` ordering runs a similarity search; same refusals as MongoDB |
 
 ## What Go doesn't allow
 
