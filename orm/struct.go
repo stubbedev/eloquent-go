@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -31,7 +32,10 @@ type RowQuery struct {
 	rawSel   string
 	joins    []frag
 	where    []func(*SQL)
+	nodes    []Node // document-store form of where, when translatable
+	badNode  bool   // set by clauses with no document form (WhereRaw, OrWhere)
 	orders   []frag
+	ordCols  []PlanOrder
 	limit    int
 	offset   int
 }
@@ -65,6 +69,7 @@ func (r RowQuery) cond(col, op string, v any) func(*SQL) {
 // Where adds a simple column condition (where('active', '=', true)).
 func (r RowQuery) Where(col, op string, v any) RowQuery {
 	r.where = append(slices.Clip(r.where), r.cond(col, op, v))
+	r.nodes = append(slices.Clip(r.nodes), Field{Column: col, Op: op, Value: v})
 	return r
 }
 
@@ -86,6 +91,7 @@ func (r RowQuery) OrWhere(col, op string, v any) RowQuery {
 		second[0](b)
 		b.Write(")")
 	}}
+	r.badNode = true
 	return r
 }
 
@@ -112,16 +118,16 @@ func (r RowQuery) whereIn(op, col string, vs []any) RowQuery {
 			b.Arg(v)
 		}
 		b.Write(")")
-	})
+	}, List{Column: col, Not: op == "NOT IN", Values: vs})
 }
 
 // WhereNull and WhereNotNull filter on column nullness.
 func (r RowQuery) WhereNull(col string) RowQuery {
-	return r.whereRawCol(func(b *SQL) { b.Ident(col); b.Write(" IS NULL") })
+	return r.whereRawCol(func(b *SQL) { b.Ident(col); b.Write(" IS NULL") }, NullTest{Column: col})
 }
 
 func (r RowQuery) WhereNotNull(col string) RowQuery {
-	return r.whereRawCol(func(b *SQL) { b.Ident(col); b.Write(" IS NOT NULL") })
+	return r.whereRawCol(func(b *SQL) { b.Ident(col); b.Write(" IS NOT NULL") }, NullTest{Column: col, Not: true})
 }
 
 // WhereBetween filters a column between lo and hi.
@@ -132,16 +138,21 @@ func (r RowQuery) WhereBetween(col string, lo, hi any) RowQuery {
 		b.Arg(lo)
 		b.Write(" AND ")
 		b.Arg(hi)
-	})
+	}, Range{Column: col, Lo: lo, Hi: hi})
 }
 
 // WhereRaw adds a condition from SQL with ? placeholders (whereRaw).
 func (r RowQuery) WhereRaw(sqlFragment string, args ...any) RowQuery {
-	return r.whereRawCol(func(b *SQL) { b.Raw(sqlFragment, args...) })
+	return r.whereRawCol(func(b *SQL) { b.Raw(sqlFragment, args...) }, nil)
 }
 
-func (r RowQuery) whereRawCol(f func(*SQL)) RowQuery {
+func (r RowQuery) whereRawCol(f func(*SQL), node Node) RowQuery {
 	r.where = append(slices.Clip(r.where), f)
+	if node == nil {
+		r.badNode = true
+	} else {
+		r.nodes = append(slices.Clip(r.nodes), node)
+	}
 	return r
 }
 
@@ -188,6 +199,7 @@ func (r RowQuery) OrderByDesc(col string) RowQuery {
 
 func (r RowQuery) order(col, dir string) RowQuery {
 	r.orders = append(slices.Clip(r.orders), func(b *SQL) { b.Ident(col); b.Write(dir) })
+	r.ordCols = append(slices.Clip(r.ordCols), PlanOrder{Column: col, Desc: dir == " DESC"})
 	return r
 }
 
@@ -213,7 +225,11 @@ func (r RowQuery) render(b *SQL, f frag) {
 		}
 	}
 	b.Write(" FROM ")
-	b.Ident(r.name)
+	if strings.ContainsAny(r.name, "()'") {
+		b.Write(r.name) // a table function like read_csv('f.csv')
+	} else {
+		b.Ident(r.name)
+	}
 	for _, j := range r.joins {
 		j(b)
 	}
@@ -276,8 +292,40 @@ func (r RowQuery) exec(ctx context.Context, f func(*SQL)) (sql.Result, error) {
 	return res, nil
 }
 
+// docConn resolves the document store behind this builder's connection,
+// if any.
+func (r RowQuery) docConn(ctx context.Context) (DocStore, bool, error) {
+	return docStoreFor(ctx, cmp.Or(r.conn, DefaultConnection))
+}
+
+func (r RowQuery) plan() (Plan, error) {
+	if len(r.joins) > 0 {
+		return Plan{}, &ErrNotTranslatable{Reason: "joins"}
+	}
+	if r.distinct {
+		return Plan{}, &ErrNotTranslatable{Reason: "distinct"}
+	}
+	if r.badNode {
+		return Plan{}, &ErrNotTranslatable{Reason: "whereRaw / orWhere"}
+	}
+	p := Plan{Table: r.name, Columns: r.selects, Orders: r.ordCols, Limit: r.limit, Offset: r.offset}
+	if len(r.nodes) > 0 {
+		p.Where = Composite{Parts: r.nodes}
+	}
+	return p, nil
+}
+
 // Get runs the query and returns every row as a map of column to value.
 func (r RowQuery) Get(ctx context.Context) ([]map[string]any, error) {
+	if ds, ok, err := r.docConn(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		p, err := r.plan()
+		if err != nil {
+			return nil, fmt.Errorf("orm: query on %s: %w", r.name, err)
+		}
+		return ds.FindDocs(ctx, r.name, p)
+	}
 	rows, err := r.run(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -310,6 +358,15 @@ func (r RowQuery) Pluck(ctx context.Context, col string) ([]any, error) {
 
 // Count returns the number of matching rows.
 func (r RowQuery) Count(ctx context.Context) (int64, error) {
+	if ds, ok, err := r.docConn(ctx); err != nil {
+		return 0, err
+	} else if ok {
+		p, err := r.plan()
+		if err != nil {
+			return 0, err
+		}
+		return ds.CountDocs(ctx, r.name, p)
+	}
 	r.selects, r.distinct, r.rawSel, r.orders, r.limit, r.offset = nil, false, "COUNT(*)", nil, 0, 0
 	var n int64
 	rows, err := r.run(ctx, nil)
@@ -338,6 +395,11 @@ func (r RowQuery) Exists(ctx context.Context) (bool, error) {
 
 // Insert inserts the given rows as-is.
 func (r RowQuery) Insert(ctx context.Context, ms ...map[string]any) error {
+	if ds, ok, err := r.docConn(ctx); err != nil {
+		return err
+	} else if ok {
+		return ds.InsertDocs(ctx, r.name, ms)
+	}
 	_, err := r.insert(ctx, ms)
 	return err
 }
@@ -445,6 +507,15 @@ func sortedKeys[V any](m map[string]V) []string {
 // Update sets the given values on every matching row and reports how many
 // changed.
 func (r RowQuery) Update(ctx context.Context, m map[string]any) (int64, error) {
+	if ds, ok, err := r.docConn(ctx); err != nil {
+		return 0, err
+	} else if ok {
+		p, err := r.plan()
+		if err != nil {
+			return 0, err
+		}
+		return ds.UpdateDocs(ctx, r.name, p, m)
+	}
 	res, err := r.exec(ctx, func(b *SQL) {
 		b.Write("UPDATE ")
 		b.Ident(r.name)
@@ -500,6 +571,15 @@ func (r RowQuery) UpdateOrInsert(ctx context.Context, attrs, values map[string]a
 
 // Delete removes every matching row and reports how many went.
 func (r RowQuery) Delete(ctx context.Context) (int64, error) {
+	if ds, ok, err := r.docConn(ctx); err != nil {
+		return 0, err
+	} else if ok {
+		p, err := r.plan()
+		if err != nil {
+			return 0, err
+		}
+		return ds.DeleteDocs(ctx, r.name, p)
+	}
 	res, err := r.exec(ctx, func(b *SQL) {
 		b.Write("DELETE FROM ")
 		b.Ident(r.name)

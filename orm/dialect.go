@@ -17,6 +17,9 @@ type Dialect interface {
 	// Returning reports whether INSERT ... RETURNING is supported; if not,
 	// LastInsertId is used for auto-incrementing keys.
 	Returning() bool
+	// AutoKeys reports whether the engine generates integer keys; when not,
+	// models on this engine need uuid, ulid or manual keys.
+	AutoKeys() bool
 	// InsertVerb is "INSERT" or e.g. MySQL's "INSERT IGNORE" when ignore is set.
 	InsertVerb(ignore bool) string
 	// OnConflict writes the upsert / insert-or-ignore clause.
@@ -36,6 +39,14 @@ type Dialect interface {
 	JSONHasKey(b *SQL, e AnyExpr, path []string)
 	// FullText writes a full text match of term against exprs (whereFullText).
 	FullText(b *SQL, exprs []AnyExpr, term string)
+	// VectorDistance orders by the distance between the vector expression e
+	// and arg under the metric (nearest-neighbour search).
+	VectorDistance(b *SQL, e AnyExpr, arg any, m VectorMetric)
+	// UpdatePrefix starts an UPDATE statement for table including the SET
+	// keyword; ClickHouse's is ALTER TABLE ... UPDATE (no SET).
+	UpdatePrefix(b *SQL, table string)
+	// DeletePrefix starts a DELETE statement for table.
+	DeletePrefix(b *SQL, table string)
 	// Truncate empties a table and resets its auto-increment counter.
 	Truncate(table string) []string
 }
@@ -50,9 +61,11 @@ const (
 )
 
 var (
-	SQLite   Dialect = sqliteDialect{}
-	Postgres Dialect = postgresDialect{}
-	MySQL    Dialect = mysqlDialect{}
+	SQLite            Dialect = sqliteDialect{}
+	Postgres          Dialect = postgresDialect{}
+	MySQL             Dialect = mysqlDialect{}
+	DuckDBDialect             = duckdbDialect{}
+	ClickHouseDialect         = clickhouseDialect{}
 )
 
 // DialectFor maps a database/sql driver name to a dialect.
@@ -64,6 +77,10 @@ func DialectFor(driver string) (Dialect, bool) {
 		return Postgres, true
 	case "mysql", "mariadb":
 		return MySQL, true
+	case "duckdb", "duckdb-go":
+		return DuckDBDialect, true
+	case "clickhouse":
+		return ClickHouseDialect, true
 	}
 	return nil, false
 }
@@ -77,6 +94,7 @@ func (sqliteDialect) Placeholder(int) string       { return "?" }
 func (sqliteDialect) Quote(id string) string       { return doubleQuote(id) }
 func (sqliteDialect) Bool(v bool) string           { return map[bool]string{true: "1", false: "0"}[v] }
 func (sqliteDialect) Returning() bool              { return true }
+func (sqliteDialect) AutoKeys() bool               { return true }
 func (sqliteDialect) InsertVerb(bool) string       { return "INSERT" }
 func (sqliteDialect) Lock(LockMode) string         { return "" } // SQLite locks the whole database
 func (sqliteDialect) Random() string               { return "RANDOM()" }
@@ -134,6 +152,33 @@ func (d sqliteDialect) Truncate(table string) []string {
 	return []string{"DELETE FROM " + d.Quote(table), "DELETE FROM sqlite_sequence WHERE name = " + literal(d, table)}
 }
 
+func (sqliteDialect) UpdatePrefix(b *SQL, table string) {
+	b.Write("UPDATE ")
+	b.Ident(table)
+	b.Write(" SET")
+}
+
+func (sqliteDialect) DeletePrefix(b *SQL, table string) {
+	b.Write("DELETE FROM ")
+	b.Ident(table)
+}
+
+func (sqliteDialect) VectorDistance(b *SQL, e AnyExpr, arg any, m VectorMetric) {
+	if m != L2 {
+		b.Write("orm_vector_metric_unsupported(")
+		e.build(b)
+		b.Write(")")
+		return
+	}
+	b.Write("sqrt((SELECT sum((je.value - ")
+	b.Arg(arg)
+	b.Write(") * (je.value - ")
+	b.Arg(arg)
+	b.Write(")) FROM json_each(")
+	e.build(b)
+	b.Write(") je))")
+}
+
 // JSONContains propagates NULL for a NULL document, like Postgres and MySQL,
 // so negating it doesn't match rows without JSON.
 func (sqliteDialect) JSONContains(b *SQL, e AnyExpr, v any) {
@@ -163,6 +208,7 @@ func (postgresDialect) Placeholder(n int) string { return "$" + strconv.Itoa(n) 
 func (postgresDialect) Quote(id string) string   { return doubleQuote(id) }
 func (postgresDialect) Bool(v bool) string       { return strings.ToUpper(strconv.FormatBool(v)) }
 func (postgresDialect) Returning() bool          { return true }
+func (postgresDialect) AutoKeys() bool           { return true }
 func (postgresDialect) InsertVerb(bool) string   { return "INSERT" }
 func (postgresDialect) Random() string           { return "RANDOM()" }
 func (postgresDialect) Limit(b *SQL, l, o int)   { limit(b, l, o, "") }
@@ -241,6 +287,24 @@ func (d postgresDialect) Truncate(table string) []string {
 	return []string{"TRUNCATE TABLE " + d.Quote(table) + " RESTART IDENTITY CASCADE"}
 }
 
+func (postgresDialect) UpdatePrefix(b *SQL, table string) {
+	b.Write("UPDATE ")
+	b.Ident(table)
+	b.Write(" SET")
+}
+
+func (postgresDialect) DeletePrefix(b *SQL, table string) {
+	b.Write("DELETE FROM ")
+	b.Ident(table)
+}
+
+func (postgresDialect) VectorDistance(b *SQL, e AnyExpr, arg any, m VectorMetric) {
+	e.build(b)
+	b.Write(" ", map[VectorMetric]string{L2: "<->", Cosine: "<=>", InnerProduct: "<#>"}[m], " ")
+	b.Arg(arg)
+	b.Write("::vector")
+}
+
 func (postgresDialect) JSONLength(b *SQL, e AnyExpr) {
 	b.Write("jsonb_array_length((")
 	e.build(b)
@@ -258,6 +322,7 @@ func (mysqlDialect) Quote(id string) string {
 }
 func (mysqlDialect) Bool(v bool) string     { return map[bool]string{true: "1", false: "0"}[v] }
 func (mysqlDialect) Returning() bool        { return false }
+func (mysqlDialect) AutoKeys() bool         { return true }
 func (mysqlDialect) Random() string         { return "RAND()" }
 func (mysqlDialect) Limit(b *SQL, l, o int) { limit(b, l, o, "18446744073709551615") }
 
@@ -341,6 +406,25 @@ func (mysqlDialect) FullText(b *SQL, exprs []AnyExpr, term string) {
 
 func (d mysqlDialect) Truncate(table string) []string {
 	return []string{"TRUNCATE TABLE " + d.Quote(table)}
+}
+
+func (mysqlDialect) UpdatePrefix(b *SQL, table string) {
+	b.Write("UPDATE ")
+	b.Ident(table)
+	b.Write(" SET")
+}
+
+func (mysqlDialect) DeletePrefix(b *SQL, table string) {
+	b.Write("DELETE FROM ")
+	b.Ident(table)
+}
+
+func (mysqlDialect) VectorDistance(b *SQL, e AnyExpr, arg any, m VectorMetric) {
+	b.Write("DISTANCE(")
+	e.build(b)
+	b.Write(", ")
+	b.Arg(arg)
+	b.Write(", ", map[VectorMetric]string{L2: "'EUCLIDEAN'", Cosine: "'COSINE'", InnerProduct: "'DOT'"}[m], ")")
 }
 
 // ---------------------------------------------------------------------------

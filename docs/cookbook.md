@@ -676,7 +676,7 @@ scaffolds the file above.
 
 ```sh
 docker compose up -d --wait   # Postgres 17 :54329, MySQL 8.4 :33069, MariaDB 11.4 :33070
-make test-all
+just test-all
 ```
 
 Each service creates two empty databases, `eloquent` and `eloquent_audit`.

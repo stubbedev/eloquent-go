@@ -39,9 +39,11 @@ type ForeignKeyInfo struct {
 func (s *Builder) Tables(ctx context.Context) ([]string, error) {
 	var out []string
 	err := s.query(ctx, map[string]string{
-		"sqlite":   "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-		"postgres": "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' ORDER BY table_name",
-		"mysql":    "SELECT table_name FROM information_schema.tables WHERE table_schema = database() AND table_type = 'BASE TABLE' ORDER BY table_name",
+		"sqlite":     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+		"postgres":   "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' ORDER BY table_name",
+		"mysql":      "SELECT table_name FROM information_schema.tables WHERE table_schema = database() AND table_type = 'BASE TABLE' ORDER BY table_name",
+		"duckdb":     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' AND table_type = 'BASE TABLE' ORDER BY table_name",
+		"clickhouse": "SELECT name FROM system.tables WHERE database = currentDatabase() ORDER BY name",
 	}, nil, func(r *sql.Rows) error {
 		var n string
 		out = append(out, n)
@@ -71,9 +73,11 @@ func (s *Builder) GetColumns(ctx context.Context, table string) ([]ColumnInfo, e
 		autoinc = strings.Contains(strings.ToLower(create.String), "autoincrement")
 	}
 	err := s.query(ctx, map[string]string{
-		"sqlite":   `SELECT name, type, "notnull" = 0, dflt_value, pk = 1 AND lower(type) = 'integer' FROM pragma_table_xinfo(?) WHERE hidden != 1 ORDER BY cid`,
-		"postgres": `SELECT column_name, data_type, is_nullable = 'YES', column_default, coalesce(column_default LIKE 'nextval(%', false) OR is_identity = 'YES' FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position`,
-		"mysql":    `SELECT column_name, column_type, is_nullable = 'YES', column_default, extra LIKE '%auto_increment%' FROM information_schema.columns WHERE table_schema = database() AND table_name = ? ORDER BY ordinal_position`,
+		"sqlite":     `SELECT name, type, "notnull" = 0, dflt_value, pk = 1 AND lower(type) = 'integer' FROM pragma_table_xinfo(?) WHERE hidden != 1 ORDER BY cid`,
+		"postgres":   `SELECT column_name, data_type, is_nullable = 'YES', column_default, coalesce(column_default LIKE 'nextval(%', false) OR is_identity = 'YES' FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position`,
+		"mysql":      `SELECT column_name, column_type, is_nullable = 'YES', column_default, extra LIKE '%auto_increment%' FROM information_schema.columns WHERE table_schema = database() AND table_name = ? ORDER BY ordinal_position`,
+		"duckdb":     `SELECT column_name, data_type, is_nullable = 'YES', column_default, false FROM information_schema.columns WHERE table_schema = 'main' AND table_name = ? ORDER BY ordinal_position`,
+		"clickhouse": `SELECT name, type, type LIKE 'Nullable%', default_value, false FROM system.columns WHERE database = currentDatabase() AND table = ? ORDER BY position`,
 	}, []any{table}, func(r *sql.Rows) error {
 		var c ColumnInfo
 		var def sql.NullString

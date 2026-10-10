@@ -50,7 +50,7 @@ func (q Query[M]) WithCount[R any](rel Relation[M, R], into Column[M, int64], sc
 // WithExists selects whether any related row exists into a virtual column.
 func (q Query[M]) WithExists[R any](rel Relation[M, R], into Column[M, bool], scopes ...func(Query[R]) Query[R]) Query[M] {
 	sub := rel.correlate(chain(scopes)).forAggregate()
-	return q.AddSelectAs(into, Scalar[M, bool]{func(b *SQL) {
+	return q.AddSelectAs(into, Scalar[M, bool]{f: func(b *SQL) {
 		b.Write("EXISTS (")
 		sub.renderSelect(b, constSelect("1"))
 		b.Write(")")
@@ -120,7 +120,7 @@ func (q Query[M]) WhereRelation[R any](rel Relation[M, R], conds ...Cond[R]) Que
 // HasCount is has('posts', '>=', 3): compares the related row count.
 func (q Query[M]) HasCount[R any](rel Relation[M, R], op string, n int64, scopes ...func(Query[R]) Query[R]) Query[M] {
 	sub := relAggregate[int64](rel, scopes, func(b *SQL) { b.Write("COUNT(*)") })
-	return q.Where(Cond[M]{func(b *SQL) { sub.build(b); b.Write(" ", op, " "); b.Arg(n) }})
+	return q.Where(Cond[M]{f: func(b *SQL) { sub.build(b); b.Write(" ", op, " "); b.Arg(n) }})
 }
 
 // ---------------------------------------------------------------------------
@@ -732,7 +732,7 @@ func (h throughBase[M, T, R, K, TK]) load(ctx context.Context, conn string, pare
 func (h throughBase[M, T, R, K, TK]) joined(q Query[R]) Query[R] {
 	q = q.Join(h.through, h.secondLocal.EqCol(h.secondKey))
 	if t := h.through; t.softDeletes() {
-		q = q.WhereOf(Cond[T]{func(b *SQL) { b.Col(t.Name, t.DeletedAt); b.Write(" IS NULL") }})
+		q = q.WhereOf(Cond[T]{f: func(b *SQL) { b.Col(t.Name, t.DeletedAt); b.Write(" IS NULL") }})
 	}
 	return q
 }

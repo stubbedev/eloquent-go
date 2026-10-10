@@ -2,13 +2,15 @@
 # against each engine:
 #
 #   docker compose up -d --wait
-#   make test-all        # sqlite + postgres + mysql + mariadb
+#   just test-all        # sqlite + postgres + mysql + mariadb + duckdb
+#                        # + clickhouse + mongo + qdrant
 #
 # Each engine gets two empty databases: "eloquent" (default connection) and
 # "eloquent_audit" (the example's second connection).
 services:
   postgres:
-    image: postgres:17
+    # pgvector's image is stock Postgres plus the vector extension.
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: eloquent
       POSTGRES_PASSWORD: eloquent
@@ -56,3 +58,33 @@ services:
       interval: 2s
       timeout: 5s
       retries: 60
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.9-alpine
+    environment:
+      CLICKHOUSE_PASSWORD: eloquent
+    volumes:
+      - ./testdata/docker/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports: ["127.0.0.1:19000:9000", "127.0.0.1:18123:8123"]
+    ulimits: { nofile: { soft: 262144, hard: 262144 } }
+    tmpfs: [/var/lib/clickhouse]
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mongo:
+    image: mongo:8
+    ports: ["127.0.0.1:17017:27017"]
+    tmpfs: [/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    ports: ["127.0.0.1:16333:6333"]
+    tmpfs: [/qdrant/storage]

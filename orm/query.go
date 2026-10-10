@@ -85,7 +85,7 @@ func (q Query[M]) OrWhereNot(conds ...Cond[M]) Query[M] { return q.OrWhere(Not(A
 // WhereOf adds conditions on a joined model: after
 // Join(Posts.Table, ...), WhereOf(Posts.Published.Eq(true)).
 func (q Query[M]) WhereOf[O any](conds ...Cond[O]) Query[M] {
-	return q.Where(Cond[M]{And(conds...).f})
+	return q.Where(Cond[M]{f: And(conds...).f})
 }
 
 // WhereKey filters by primary key.
@@ -94,7 +94,12 @@ func (q Query[M]) WhereKey(ids ...any) Query[M] { return q.Where(q.keyIn("IN", i
 func (q Query[M]) WhereKeyNot(ids ...any) Query[M] { return q.Where(q.keyIn("NOT IN", ids)) }
 
 func (q Query[M]) keyIn(op string, ids []any) Cond[M] {
-	return Scalar[M, any]{q.keyCol()}.in(op, ids)
+	vals := make([]any, len(ids))
+	copy(vals, ids)
+	return Cond[M]{
+		f:  Scalar[M, any]{f: q.keyCol()}.in(op, ids).f,
+		ir: List{Column: q.table.PrimaryKey, Not: op == "NOT IN", Values: vals},
+	}
 }
 
 func (q Query[M]) keyCol() frag {
@@ -319,9 +324,9 @@ func (q Query[M]) prepared() Query[M] {
 		col := func(b *SQL) { b.Col(t.Name, t.DeletedAt) }
 		switch q.trashed {
 		case withoutTrashed:
-			q.where = append(slices.Clip(q.where), Cond[M]{func(b *SQL) { col(b); b.Write(" IS NULL") }})
+			q.where = append(slices.Clip(q.where), Cond[M]{f: func(b *SQL) { col(b); b.Write(" IS NULL") }})
 		case onlyTrashed:
-			q.where = append(slices.Clip(q.where), Cond[M]{func(b *SQL) { col(b); b.Write(" IS NOT NULL") }})
+			q.where = append(slices.Clip(q.where), Cond[M]{f: func(b *SQL) { col(b); b.Write(" IS NOT NULL") }})
 		}
 	}
 	return q

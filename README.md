@@ -279,7 +279,101 @@ err = orm.From("users").UpdateOrInsert(ctx,
 ```
 
 It also has `First`, `Pluck`, `Count`, `Exists`, `Join`, `LeftJoin`,
-`Distinct`, `Insert` and `Delete`; see the cookbook.
+`Distinct`, `Insert`, `InsertGetID`, `Update`, `UpdateOrInsert` and
+`Delete`; see the cookbook.
+
+## Analytical engines
+
+**DuckDB** (`github.com/marcboeker/go-duckdb/v2`, CGo) is an embedded OLAP
+engine: open a file and query it. CSV, Parquet and JSON are tables through
+table functions, so `orm.From` doubles as the flat-file reader.
+
+```go
+orm.Open("lake", "duckdb", "analytics.duckdb")
+
+n, err := orm.From("read_csv('events.csv')").On("lake").
+	Where("kind", "=", "click").
+	Count(ctx)
+```
+
+Auto-increment keys draw from per-table sequences the schema builder
+creates; migrations and the full query surface work.
+
+**ClickHouse** (`github.com/ClickHouse/clickhouse-go/v2`) speaks the same
+builder with the engine's physics showing through: `Update` runs as
+`ALTER TABLE ... UPDATE`, `Delete` as a lightweight `DELETE FROM` — both
+made synchronous with `mutations_sync` — affected-row counts are always 0,
+and there are no transactions or generated integer keys (use UUID or
+manual keys). Tables get `ENGINE = MergeTree ORDER BY tuple()` unless the
+blueprint sets an engine.
+
+## Vector search
+
+`orm.Vector[orm.D3]` (any `Dn` dimension) is a fixed-size float vector
+column. Store it in pgvector (`t.Vector("embedding", 3)` plus
+`CREATE EXTENSION vector`), DuckDB (`float[3]`) or Qdrant, and order by
+distance for a KNN query:
+
+```go
+type Doc struct {
+	orm.Model
+	ID        int64             `db:"id"`
+	Embedding orm.Vector[orm.D3] `db:"embedding"`
+}
+
+docs, err := Docs.Query().
+	OrderBy(Docs.Embedding.Nearest(orm.NewVector3(0.2, 0.1, 0.9), orm.Cosine)).
+	Limit(10).
+	Get(ctx)
+```
+
+Metrics are `orm.L2` (pgvector `<->`), `orm.Cosine` (`<=>`) and
+`orm.InnerProduct` (`<#>`); DuckDB uses `array_distance` and friends, MySQL
+the `DISTANCE()` of HeatWave / MySQL 9, and SQLite computes L2 in SQL over
+JSON while refusing the other metrics loudly.
+
+## Document stores
+
+MongoDB and Qdrant run the same typed builder through a translation layer
+instead of SQL. Register the connection, point tables at it with
+`connection=`, and query as usual:
+
+```go
+orm.OpenMongo("mongo", "mongodb://localhost:27017", "app")
+
+//orm:table events connection=mongo key_type=uuid
+type Event struct {
+	orm.Model
+	ID   string `db:"id"`
+	Kind string `db:"kind"`
+}
+
+events, err := Events.Query().Where(Events.Kind.Eq("click")).Limit(10).Get(ctx)
+err = Events.Query().Where(Events.Kind.Eq("click")).Update(ctx, Events.Kind.Set("tap"))
+```
+
+What translates: `Where` (comparisons, `In`, `Between`, null tests,
+`And` / `Or` / `Not`), `OrderBy` on columns, `Limit` / `Offset`, `Select`,
+and the model lifecycle — `Create`, `Save` (dirty columns only), `Delete`,
+soft deletes, events, `Count`, `Exists`, pagination, and `orm.From(...)`
+table queries. Keys must be UUID, ULID or manual. What refuses, with a
+precise error naming the part (`orm.IsNotTranslatable`): joins, unions,
+`groupBy`, raw fragments, subqueries, aggregates and `Increment`.
+
+**Qdrant** is the vector native: collections are tables, payload fields are
+the columns, and an `orm.Vector` column becomes the collection's vector —
+`Nearest` ordering runs a real similarity search.
+
+```go
+store, _ := orm.OpenQdrant("qdrant", "http://localhost:6333")
+store.EnsureCollection(ctx, "documents", 3, orm.Cosine) // in a migration
+
+//orm:table documents connection=qdrant key_type=uuid
+docs, err := Docs.Query().
+	OrderBy(Docs.Vec.Nearest(orm.NewVector3(1, 0, 0), orm.Cosine)).
+	Limit(10).
+	Get(ctx)
+```
 
 ## Encrypted and hashed columns
 
@@ -393,9 +487,10 @@ toggling has no effect inside a transaction.
 ## Testing
 
 ```sh
-make test                      # SQLite, no setup needed
-docker compose up -d --wait    # Postgres 17, MySQL 8.4, MariaDB 11.4
-make test-all                  # SQLite + all three servers
+just test                      # SQLite, no setup needed
+docker compose up -d --wait    # Postgres 17 (pgvector), MySQL 8.4, MariaDB 11.4,
+                               # ClickHouse 25, MongoDB 8, Qdrant 1.15
+just test-all                  # every engine
 ```
 
 CI (`.github/workflows/test.yml`) runs the same matrix.

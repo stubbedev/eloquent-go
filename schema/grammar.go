@@ -52,22 +52,29 @@ const (
 var errRebuild = errors.New("schema: sqlite table rebuild required")
 
 // grammar compiles blueprints for one database engine.
-type grammar struct{ kind string } // "sqlite", "postgres" or "mysql"
+type grammar struct{ kind string } // "sqlite", "postgres", "mysql", "duckdb", "clickhouse"
 
 func grammarFor(dialect string) (grammar, error) {
 	switch dialect {
-	case "sqlite", "postgres", "mysql":
+	case "sqlite", "postgres", "mysql", "duckdb", "clickhouse":
 		return grammar{dialect}, nil
 	}
 	return grammar{}, fmt.Errorf("schema: no grammar for dialect %q", dialect)
 }
 
 func (g grammar) pick(sqlite, postgres, mysql string) string {
-	return map[string]string{"sqlite": sqlite, "postgres": postgres, "mysql": mysql}[g.kind]
+	if v, ok := map[string]string{"sqlite": sqlite, "postgres": postgres, "mysql": mysql}[g.kind]; ok {
+		return v
+	}
+	// DuckDB is Postgres-flavoured; ClickHouse is closest to the simple forms.
+	if g.kind == "duckdb" {
+		return postgres
+	}
+	return sqlite
 }
 
 func (g grammar) quote(id string) string {
-	if g.kind == "mysql" {
+	if g.kind == "mysql" || g.kind == "clickhouse" {
 		return "`" + strings.ReplaceAll(id, "`", "``") + "`"
 	}
 	return `"` + strings.ReplaceAll(id, `"`, `""`) + `"`
@@ -83,11 +90,17 @@ func (g grammar) list(ids []string) string {
 
 // transactionalDDL reports whether DDL can be rolled back (Laravel wraps
 // migrations in a transaction on such engines).
-func (g grammar) transactionalDDL() bool { return g.kind != "mysql" }
+func (g grammar) transactionalDDL() bool { return g.kind != "mysql" && g.kind != "clickhouse" }
 
 func (g grammar) typeOf(c *Column) string {
 	n := strconv.Itoa
 	auto := c.IsAutoIncrement && c.Identity == ""
+	switch g.kind {
+	case "duckdb":
+		return duckdbType(c, auto)
+	case "clickhouse":
+		return clickhouseType(c)
+	}
 	switch c.Type {
 	case TypeString:
 		return g.pick("varchar", "varchar("+n(c.Length)+")", "varchar("+n(c.Length)+")")
@@ -208,7 +221,8 @@ func (g grammar) literal(v any) string {
 	case string:
 		return "'" + strings.ReplaceAll(v, "'", "''") + "'"
 	case bool:
-		if g.kind == "postgres" {
+		switch g.kind {
+		case "postgres", "duckdb", "clickhouse":
 			return strings.ToUpper(strconv.FormatBool(v))
 		}
 		return map[bool]string{true: "1", false: "0"}[v]
@@ -261,7 +275,8 @@ func (g grammar) column(c *Column) string {
 	}
 	// Generated columns take their nullability from the expression (MariaDB
 	// rejects an explicit NOT NULL), as in Laravel's grammars.
-	if c.StoredExpr == "" && c.VirtualExpr == "" {
+	if c.StoredExpr == "" && c.VirtualExpr == "" && g.kind != "clickhouse" {
+		// ClickHouse carries nullability in Nullable(type) itself.
 		if c.IsNullable {
 			w(" NULL")
 		} else {
@@ -277,7 +292,7 @@ func (g grammar) column(c *Column) string {
 	if c.OnUpdateNow && g.kind == "mysql" {
 		w(" ON UPDATE CURRENT_TIMESTAMP")
 	}
-	if (c.Type == TypeEnum) && g.kind != "mysql" {
+	if (c.Type == TypeEnum) && g.kind != "mysql" && g.kind != "clickhouse" {
 		w(" CHECK (", g.quote(c.Name), " IN (", g.literals(c.Allowed), "))")
 	}
 	if c.Identity != "" && g.kind == "postgres" {
@@ -289,6 +304,8 @@ func (g grammar) column(c *Column) string {
 			w(" PRIMARY KEY")
 		case "mysql":
 			w(" AUTO_INCREMENT PRIMARY KEY")
+		case "duckdb":
+			w(" PRIMARY KEY DEFAULT nextval('", c.bp.table+"_"+c.Name+"_seq')")
 		}
 	}
 	if g.kind == "mysql" {
@@ -347,7 +364,8 @@ func (g grammar) compileCreate(bp *Blueprint) ([]string, error) {
 		head.WriteString("IF NOT EXISTS ")
 	}
 	head.WriteString(g.quote(bp.table) + " (" + strings.Join(defs, ", ") + ")")
-	if g.kind == "mysql" {
+	switch g.kind {
+	case "mysql":
 		if bp.engine != "" {
 			head.WriteString(" ENGINE = " + bp.engine)
 		}
@@ -360,10 +378,29 @@ func (g grammar) compileCreate(bp *Blueprint) ([]string, error) {
 		if bp.comment != "" {
 			head.WriteString(" COMMENT = " + g.literal(bp.comment))
 		}
+	case "clickhouse":
+		// Every ClickHouse table needs a table engine; MergeTree is the
+		// default, overridable with Blueprint engine option.
+		engine := cmpOr(bp.engine, "MergeTree")
+		head.WriteString(" ENGINE = " + engine + " ORDER BY tuple()")
 	}
 	stmts := append([]string{head.String()}, after...)
 	stmts = append(stmts, g.startingValues(bp)...)
-	return append(stmts, g.comments(bp)...), nil
+	stmts = append(stmts, g.comments(bp)...)
+	if g.kind == "duckdb" {
+		// DuckDB has no serial types; auto-increment columns draw from a
+		// per-table sequence the column's DEFAULT references.
+		var seqs []string
+		for _, c := range bp.columns {
+			if c.IsAutoIncrement {
+				seqs = append(seqs, "CREATE SEQUENCE IF NOT EXISTS "+g.quote(bp.table+"_"+c.Name+"_seq"))
+			}
+		}
+		if len(seqs) > 0 {
+			stmts = append(seqs, stmts...)
+		}
+	}
+	return stmts, nil
 }
 
 func (g grammar) primaryName(table string, idx *Index) string {
@@ -591,6 +628,8 @@ func (g grammar) foreignKeyChecks(on bool) string {
 		return "PRAGMA foreign_keys = " + map[bool]string{true: "ON", false: "OFF"}[on]
 	case "mysql":
 		return "SET FOREIGN_KEY_CHECKS = " + map[bool]string{true: "1", false: "0"}[on]
+	case "postgres":
+		return "SET CONSTRAINTS ALL " + map[bool]string{true: "IMMEDIATE", false: "DEFERRED"}[on]
 	}
-	return "SET CONSTRAINTS ALL " + map[bool]string{true: "IMMEDIATE", false: "DEFERRED"}[on]
+	return ""
 }

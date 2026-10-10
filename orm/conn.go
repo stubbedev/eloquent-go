@@ -25,7 +25,10 @@ type Conn struct {
 	DB DB // used for every statement unless Read is set
 	// Read is an optional second pool that SELECTs are routed to
 	// (Laravel's read/write connection split).
-	Read    DB
+	Read DB
+	// Doc is set for document-store connections (MongoDB, Qdrant); queries
+	// on them translate to the store instead of SQL.
+	Doc     DocStore
 	Dialect Dialect
 }
 
@@ -186,6 +189,10 @@ func TransactionAttemptsOn(ctx context.Context, name string, attempts int, fn fu
 func TransactionOnce(ctx context.Context, name string, fn func(ctx context.Context) error) (err error) {
 	if st, ok := ctx.Value(txKey{name}).(*txState); ok {
 		return savepoint(ctx, name, st, fn)
+	}
+	if c, err := lookup(ctx, name); err == nil && c.Doc != nil {
+		// Document stores have no transactions; run the unit of work as-is.
+		return fn(ctx)
 	}
 	c, err := lookup(ctx, name)
 	if err != nil {

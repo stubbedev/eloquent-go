@@ -18,6 +18,9 @@ var ErrStop = errors.New("orm: stop iteration")
 // Get runs the query and returns all matching models with eager loads applied.
 func (q Query[M]) Get(ctx context.Context) ([]M, error) {
 	q = q.prepared()
+	if models, err := q.findDocs(ctx); err != nil || models != nil {
+		return models, err
+	}
 	rows, err := q.query(ctx, func(b *SQL) { q.renderSelect(b, nil) })
 	if err != nil {
 		return nil, err
@@ -134,6 +137,9 @@ func (t *Table[M]) Where(conds ...Cond[M]) Query[M] { return t.Query().Where(con
 // ---------------------------------------------------------------------------
 
 func (q Query[M]) Exists(ctx context.Context) (bool, error) {
+	if n, ok, err := q.countDocs(ctx); ok {
+		return err == nil && n > 0, err
+	}
 	q = q.prepared()
 	q.extras, q.eager = nil, nil
 	rows, err := q.Limit(1).query(ctx, func(b *SQL) { q.Limit(1).renderSelect(b, constSelect("1")) })
@@ -150,6 +156,9 @@ func (q Query[M]) DoesntExist(ctx context.Context) (bool, error) {
 }
 
 func (q Query[M]) Count(ctx context.Context) (int64, error) {
+	if n, ok, err := q.countDocs(ctx); ok {
+		return n, err
+	}
 	q = q.prepared()
 	if len(q.groups) > 0 || q.distinct || len(q.unions) > 0 {
 		inner := q.forAggregate()
@@ -301,6 +310,11 @@ func scalarOf[V, M any](ctx context.Context, q Query[M], f frag) (V, error) {
 // Explain returns the database's query plan for the query as one map of
 // column name to value per row (explain()).
 func (q Query[M]) Explain(ctx context.Context) ([]map[string]any, error) {
+	if _, ok, err := q.docstore(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		return nil, &ErrNotTranslatable{Reason: "explain"}
+	}
 	q = q.prepared()
 	q.extras, q.eager = nil, nil
 	rows, err := q.query(ctx, func(b *SQL) {
@@ -376,7 +390,7 @@ func (q Query[M]) chunksByID(ctx context.Context, size int) iter.Seq2[[]M, error
 		for {
 			page := q.Reorder(Order[M]{f: func(b *SQL) { q.keyCol()(b); b.Write(" ASC") }}).Limit(size)
 			if last != nil {
-				page = page.Where(Scalar[M, any]{q.keyCol()}.Gt(last))
+				page = page.Where(Scalar[M, any]{f: q.keyCol()}.Gt(last))
 			}
 			models, err := page.Get(ctx)
 			if err != nil {
@@ -582,7 +596,7 @@ func cursorCond[M any](orders []Order[M], cursor string) (Cond[M], error) {
 				op = map[bool]string{false: ">", true: "<"}[orders[j].desc]
 			}
 			col, v := orders[j].col, vals[j]
-			ands = append(ands, Cond[M]{func(b *SQL) { col.build(b); b.Write(" ", op, " "); b.Arg(v) }})
+			ands = append(ands, Cond[M]{f: func(b *SQL) { col.build(b); b.Write(" ", op, " "); b.Arg(v) }})
 		}
 		ors = append(ors, And(ands...))
 	}

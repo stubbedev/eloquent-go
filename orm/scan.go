@@ -2,6 +2,7 @@ package orm
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -101,6 +102,13 @@ func assign(dst reflect.Value, src any) error {
 	if sv.CanConvert(dst.Type()) {
 		dst.Set(sv.Convert(dst.Type()))
 		return nil
+	}
+	// Document stores hand back JSON-shaped values (maps, slices); round-trip
+	// them so custom casts (orm.JSON, orm.Vector) hydrate too.
+	if b, err := json.Marshal(src); err == nil {
+		if err := json.Unmarshal(b, dst.Addr().Interface()); err == nil {
+			return nil
+		}
 	}
 	return fmt.Errorf("orm: cannot scan %T into %s", src, dst.Type())
 }

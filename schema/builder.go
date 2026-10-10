@@ -157,11 +157,21 @@ func (s *Builder) DropAllTables(ctx context.Context) error {
 }
 
 func (s *Builder) EnableForeignKeyConstraints(ctx context.Context) error {
-	return s.run(ctx, func(g grammar) ([]string, error) { return []string{g.foreignKeyChecks(true)}, nil })
+	return s.run(ctx, func(g grammar) ([]string, error) {
+		if stmt := g.foreignKeyChecks(true); stmt != "" {
+			return []string{stmt}, nil
+		}
+		return nil, nil
+	})
 }
 
 func (s *Builder) DisableForeignKeyConstraints(ctx context.Context) error {
-	return s.run(ctx, func(g grammar) ([]string, error) { return []string{g.foreignKeyChecks(false)}, nil })
+	return s.run(ctx, func(g grammar) ([]string, error) {
+		if stmt := g.foreignKeyChecks(false); stmt != "" {
+			return []string{stmt}, nil
+		}
+		return nil, nil
+	})
 }
 
 // WithoutForeignKeyConstraints runs fn with constraint checks disabled.

@@ -16,6 +16,7 @@ type SQL struct {
 	sb     strings.Builder
 	args   []any
 	inline bool              // ToRawSQL: write literals instead of placeholders
+	plain  bool              // unqualified columns (ClickHouse mutations)
 	alias  map[string]string // table -> alias, for self-referencing subqueries
 }
 
@@ -62,6 +63,11 @@ func (b *SQL) Raw(sql string, args ...any) {
 func (b *SQL) Col(table, column string) {
 	if a, ok := b.alias[table]; ok {
 		table = a
+	}
+	if b.plain {
+		// ClickHouse mutations reject qualified columns in WHERE.
+		b.Ident(column)
+		return
 	}
 	b.Ident(table)
 	b.sb.WriteString(".")

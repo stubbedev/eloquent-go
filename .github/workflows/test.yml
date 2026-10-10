@@ -12,11 +12,15 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
+      - name: Install just
+        run: |
+          curl -sSL https://github.com/casey/just/releases/latest/download/just-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C /usr/local/bin just
       - name: Start databases
         run: docker compose up -d --wait
       - name: Vet
         run: go vet ./...
       - name: Generated code is up to date
         run: go generate ./... && git diff --exit-code
-      - name: Test (SQLite, Postgres, MySQL, MariaDB)
-        run: make test-all
+      - name: Test (SQLite, Postgres, MySQL, MariaDB, DuckDB, ClickHouse, MongoDB, Qdrant)
+        run: just test-all
