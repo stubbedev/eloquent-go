@@ -31,12 +31,18 @@ Users.Query().With(PostComments)               // a Post relation on a User quer
 
 Supported databases are **SQLite**, **PostgreSQL** and **MySQL / MariaDB**.
 The dialect follows the connection, and the same query renders correctly for
-each. The full test suite runs against all four engines.
+each. The full test suite runs against all four engines, including the seeder,
+sticky-read and cast tests.
 
 ## Contents
 
 - [Requirements and install](#requirements-and-install)
 - [Quick start](#quick-start)
+- [Replicas, sticky reads and transactions](#replicas-sticky-reads-and-transactions)
+- [Seeding](#seeding)
+- [Library-only usage](#library-only-usage)
+- [Queries without a model](#queries-without-a-model)
+- [Encrypted and hashed columns](#encrypted-and-hashed-columns)
 - [Packages](#packages)
 - [Eloquent feature map](#eloquent-feature-map)
 - [What Go doesn't allow](#what-go-doesnt-allow)
@@ -120,6 +126,7 @@ schema.Register(schema.Migration{
 })
 
 schema.Run(ctx, schema.NewMigrator(), os.Args[1:], os.Stdout) // migrate | rollback | fresh | status | make ...
+// or call the methods directly: schema.NewMigrator().Migrate(ctx, false)
 ```
 
 **5. Query.** No database handle is passed around; connections resolve by
@@ -139,6 +146,161 @@ The `example/` directory contains a complete schema covering every relation
 type, its migrations, a migration CLI (`go run ./example/migrate`), and the
 test suite that exercises all of it.
 
+## Replicas, sticky reads and transactions
+
+One connection can carry two pools: `SELECT`s run against the read DSN,
+everything else (including `INSERT ... RETURNING`) against the write DSN.
+
+```go
+write, err := orm.OpenReadWrite(orm.DefaultConnection, "mysql", readDSN, writeDSN)
+```
+
+Because replication is asynchronous, a read straight after a write can land
+on a replica that has not applied it yet. `orm.Sticky` gives a ctx Laravel's
+`sticky` semantics: after the first write, the rest of that ctx reads from
+the write pool. Open the scope once where the request's ctx is created
+(middleware is the usual place); routing from there is automatic.
+
+```go
+ctx := orm.Sticky(r.Context()) // in middleware
+
+// reads hit the replica...
+users, err := Users.Query().Get(ctx)
+// ...until a write happens
+err = Users.Create(ctx, &u)
+// ...after which this read sees u despite replication lag
+users, err = Users.Query().Get(ctx)
+```
+
+A plain ctx keeps reading the replica; other requests are unaffected.
+Inside a transaction everything runs on the transaction anyway, so
+read-your-own-writes is guaranteed there without sticky. Transactions nest
+as savepoints, can run callbacks after commit, and can re-run themselves on
+deadlock:
+
+```go
+err := orm.RetryingTransaction(ctx, 3, func(ctx context.Context) error {
+	return Users.Save(ctx, &u) // re-run on deadlock or lock timeout, up to 3 times
+})
+```
+
+Every executed statement is reported to `orm.Listen` callbacks, and
+`orm.EnableQueryLog` / `orm.QueryLog` / `orm.FlushQueryLog` record them for
+debugging; `Query.Explain(ctx)` returns the database's plan as maps.
+
+## Seeding
+
+Seeders pair with factories and run each in their own transaction; a failing
+seeder stops the run. Register them next to their definition, typically from
+`init()`:
+
+```go
+var UserFactory = orm.NewFactory(Users.Table, func(n int) User {
+	return User{Name: fmt.Sprintf("User %d", n), Email: fmt.Sprintf("user%d@example.com", n)}
+})
+
+func init() {
+	schema.RegisterSeeder(schema.Seeder{
+		Name: "Users",
+		Run: func(ctx context.Context) error {
+			_, err := UserFactory.Count(50).Create(ctx)
+			return err
+		},
+	})
+}
+```
+
+The same CLI that migrates also seeds:
+
+```sh
+schema.Run(ctx, m, []string{"db:seed"}, os.Stdout)          // every seeder
+schema.Run(ctx, m, []string{"db:seed", "-class", "Users"}, os.Stdout)
+schema.Run(ctx, m, []string{"fresh", "-seed"}, os.Stdout)    // drop, migrate, seed
+schema.Run(ctx, m, []string{"make:seeder", "Users"}, os.Stdout) // scaffold a seeder
+schema.Run(ctx, m, []string{"make:model", "LineItem"}, os.Stdout) // scaffold a model
+```
+
+`schema.Seed(ctx, names...)` and `schema.SeedOn(ctx, "analytics")` expose it
+programmatically.
+
+## Library-only usage
+
+Nothing here requires a CLI. `schema.Run` is a thin flag parser over the
+same calls, so an application can migrate and seed itself at startup, and
+tests can set up their database without shelling out:
+
+```go
+import (
+	"github.com/stubbedev/eloquent-go/orm"
+	"github.com/stubbedev/eloquent-go/schema"
+
+	_ "yourapp/migrations" // init() calls schema.Register
+	_ "yourapp/seeders"    // init() calls schema.RegisterSeeder
+)
+
+func main() {
+	orm.Open(orm.DefaultConnection, "pgx", os.Getenv("DATABASE_URL"))
+
+	if _, err := schema.NewMigrator().Migrate(ctx, false); err != nil {
+		log.Fatal(err) // no-op when the schema is current
+	}
+	if _, err := schema.Seed(ctx); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Every `schema.Run` command has a method behind it: `Migrator.Migrate`,
+`Rollback`, `Reset`, `Refresh`, `Fresh`, `Status`, `Pretend`, `schema.Seed`,
+and the `Builder` DDL (`schema.On(conn).Create/...`) can be called directly
+without migrations at all. Only the `make:*` scaffolds and `go generate`
+are dev-time codegen with no runtime role.
+
+## Queries without a model
+
+Not every table deserves a struct. `orm.From` is `DB::table`: the same
+builder over a bare table, with rows as maps and no model machinery.
+
+```go
+rows, err := orm.From("users").
+	Where("active", "=", true).
+	WhereIn("country_id", 1, 2).
+	WhereNull("deleted_at").
+	WhereRaw("karma > ?", 10).
+	OrderBy("name").
+	Limit(10).
+	Get(ctx) // []map[string]any
+
+id, err := orm.From("users").InsertGetID(ctx, map[string]any{"name": "Ada", "email": "a@x.io"})
+n, err := orm.From("users").Where("id", "=", id).Update(ctx, map[string]any{"name": "Ada L"})
+err = orm.From("users").UpdateOrInsert(ctx,
+	map[string]any{"email": "a@x.io"},
+	map[string]any{"name": "Ada L"})
+```
+
+It also has `First`, `Pluck`, `Count`, `Exists`, `Join`, `LeftJoin`,
+`Distinct`, `Insert` and `Delete`; see the cookbook.
+
+## Encrypted and hashed columns
+
+```go
+orm.SetEncryptionKey([]byte(os.Getenv("APP_KEY"))) // call once at startup
+
+// type User struct {
+// 	orm.Model
+// 	ApiToken orm.Encrypted[map[string]string] `db:"api_token"` // AES-256-GCM at rest
+// 	Password orm.Hashed                     `db:"password"`    // bcrypt at rest
+// }
+
+u.Password = "secret"          // assigning plain text hashes it on write
+u.Password.Matches("secret")   // verify
+```
+
+`orm.Encrypted[V]` works for any JSON-encodable value; `orm.Hashed` stores a
+loaded hash as-is, so re-saving a model never double-hashes. `orm.JSON[V]`
+remains the cast for plain JSON columns, and any `sql.Scanner` /
+`driver.Valuer` type slots in as a custom cast.
+
 ## Packages
 
 | Package | Purpose |
@@ -156,7 +318,7 @@ test suite that exercises all of it.
 | `whereIn`, `whereBetween`, `whereNull`, `whereLike` | `Col.In`, `Col.Between`, `Col.IsNull`, `Col.Like` |
 | `whereColumn` | `Col.EqCol(other)`, `Col.Cmp(op, other)` |
 | `whereDate/Year/Month/Day/Time` | `orm.Date(col).Eq(...)`, `orm.Year(col)`, ... |
-| `whereJsonContains/Length/ContainsKey`, `->` paths | `Col.JSON[T]("a","b")`, `.JSONContains`, `.JSONLength`, `.JSONHasKey` |
+| `whereJsonContains/Length/ContainsKey/DoesntContain/Overlaps`, `->` paths | `Col.JSON[T]("a","b")`, `.JSONContains`, `.JSONDoesntContain`, `.JSONOverlaps`, `.JSONLength`, `.JSONHasKey` |
 | `whereFullText` | `WhereFullText(term, cols...)` |
 | `whereAny`, `whereAll` | `orm.AnyOf`, `orm.AllOf` |
 | `whereExists`, `whereIn(subquery)` | `orm.Exists`, `Col.InSub(q.Subquery(col))` |
@@ -164,12 +326,12 @@ test suite that exercises all of it.
 | `join`, `leftJoin`, `rightJoin`, `crossJoin`, `joinSub` | `Join`, `LeftJoin`, `RightJoin`, `CrossJoin`, `JoinSub` |
 | `groupBy`, `having`, `orderBy`, `latest`, `inRandomOrder`, `reorder` | same names |
 | `union`, `unionAll`, `when`, `unless`, `lockForUpdate`, `sharedLock` | same names |
-| `get`, `first`, `firstOrFail`, `find`, `findMany`, `sole`, `value`, `pluck` | `Get`, `First` (`ErrNotFound`), `Find`, `FindMany`, `Sole`, `Value`, `Pluck`, `PluckMap` |
+| `get`, `first`, `firstOrFail`, `find`, `findMany`, `sole`, `value`, `pluck` | `Get`, `First` (`ErrNotFound`), `Find`, `FindMany`, `FindOr`, `Sole`, `Value`, `Pluck`, `PluckMap` |
 | `count`, `sum`, `avg`, `min`, `max`, `exists` | same names; `Sum` and `Avg` only accept numeric columns |
-| `chunk`, `chunkById`, `lazy`, `cursor` | `Chunk`, `ChunkByID`, `Lazy` and `Cursor` (Go iterators) |
+| `chunk`, `chunkById`, `chunkWhile`, `lazy`, `cursor` | `Chunk`, `ChunkByID`, `ChunkWhile`, `Lazy` and `Cursor` (Go iterators) |
 | `paginate`, `simplePaginate`, `cursorPaginate` | same names |
 | `create`, `save`, `update`, `delete`, `destroy` | `Create`, `Save`, `Update`, `Delete`, `Destroy` |
-| `insert`, `insertOrIgnore`, `insertUsing`, `upsert` | same names |
+| `insert`, `insertOrIgnore`, `insertUsing`, `upsert`, `insertGetId` | same names, `InsertGetID` |
 | `increment`, `decrement`, `truncate` | `Increment`, `Decrement`, `Truncate` |
 | `firstOrNew/Create`, `updateOrCreate`, `createOrFirst` | same names with typed `Attrs(...)` |
 | `isDirty`, `isClean`, `wasChanged`, `getOriginal` | `Users.IsDirty(&u)`, `Users.Email.IsDirty(&u)`, `.Original(&u)` |
@@ -189,18 +351,19 @@ test suite that exercises all of it.
 | `withCount/Sum/Avg/Min/Max/Exists` | same names, into typed virtual columns |
 | `$user->posts()->...`, `create`, `save`, `associate` | `UserPosts.Of(&u)...`, `.Create`, `.Save`, `.Associate`, `.Dissociate` |
 | `attach`, `detach`, `sync`, `toggle`, `updateExistingPivot` | same names |
-| Casts (array/json, dates, enums, custom) | `orm.JSON[T]`, `time.Time`, typed string enums, any `sql.Scanner` / `driver.Valuer` |
-| Model factories | `orm.NewFactory(...).Count(n).State(...).Sequence(...).Create(ctx)` |
+| Casts (array/json, dates, enums, encrypted, hashed, custom) | `orm.JSON[T]`, `orm.Encrypted[V]` (`orm.SetEncryptionKey`), `orm.Hashed`, `time.Time`, typed string enums, any `sql.Scanner` / `driver.Valuer` |
+| Model factories, seeders, `db:seed`, `--seed` | `orm.NewFactory(...).Count(n).State(...).Sequence(...).Create(ctx)`; `schema.Seeder` + `RegisterSeeder` + `schema.Seed`, `db:seed [-class]`, `fresh -seed` |
 | Prunable / MassPrunable | `Prune(ctx, chunk)` / `Delete` |
-| `DB::transaction`, nested savepoints, `afterCommit` | `orm.Transaction` (nests), `orm.AfterCommit` |
-| `DB::listen`, `toSql`, `toRawSql` | `orm.Listen`, `ToSQL`, `ToRawSQL` |
-| Connections, `Model::on()` | `orm.Open` / `AddConnection`, `connection=` directive, `Query.On(name)` |
+| `DB::transaction`, nested savepoints, `afterCommit`, deadlock retry | `orm.Transaction` (nests), `orm.AfterCommit`, `orm.RetryingTransaction(ctx, attempts, fn)` |
+| `DB::listen`, `toSql`, `toRawSql`, `explain`, query log | `orm.Listen`, `ToSQL`, `ToRawSQL`, `Explain(ctx)`, `orm.EnableQueryLog` / `QueryLog` / `FlushQueryLog` |
+| Connections, `Model::on()`, read/write split, `sticky` | `orm.Open` / `AddConnection` / `OpenReadWrite`, `connection=` directive, `Query.On(name)`, `orm.Sticky(ctx)` |
+| `DB::table('users')` (no model) | `orm.From("users")`: wheres, joins, orders, `Get` as `[]map[string]any`, `Insert`, `InsertGetID`, `Update`, `UpdateOrInsert`, `Delete` |
 | `Schema::create/table/drop/rename/hasTable/hasColumn(s)/hasIndex` | `schema.Create`, `Table`, `Drop`, `Rename`, `HasTable`, `HasColumns`, `HasIndex` |
 | All Blueprint column types and modifiers | see the cookbook; generated, identity, charset, collation, `after`, `first`, `comment`, `useCurrent`, ... |
 | Indexes (primary, unique, index, fullText, spatial), `renameIndex` | same names; SQLite alterations rebuild the table like Laravel |
 | Foreign keys, `constrained`, `cascadeOnDelete`, `dropConstrainedForeignId` | same names |
 | `getColumns`, `getIndexes`, `getForeignKeys`, `getTables` | same names |
-| `migrate`, `rollback`, `reset`, `refresh`, `fresh`, `status`, `--step`, `--pretend`, `make:migration`, `db:wipe` | `schema.Run` commands and `Migrator` methods |
+| `migrate`, `rollback`, `reset`, `refresh`, `fresh`, `status`, `--step`, `--pretend`, `make:migration`, `db:wipe`, `db:seed`, `make:seeder`, `make:model` | `schema.Run` commands and `Migrator` methods |
 
 ## What Go doesn't allow
 
