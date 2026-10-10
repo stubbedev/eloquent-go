@@ -156,7 +156,27 @@ func TestRowQueryBuilder(t *testing.T) {
 	eq(t, "row values", rows[0]["name"], "Alice")
 
 	eq(t, "count", must(orm.From("users").WhereIn("country_id", 1, 2).Count(ctx)), int64(5))
-	eq(t, "exists", must(orm.From("users").Where("email", "=", "alice@example.com").Exists(ctx)), true)
+	eq(t, "exists", must(orm.From("users").Where("email", orm.Eq, "alice@example.com").Exists(ctx)), true)
+
+	// Typed columns work on row queries too: completion lists the model's
+	// columns and the compared values are compile-checked.
+	typed := must(orm.From("users").
+		SelectCols(Users.Name, Users.Karma).
+		WhereCond(Users.Active.Eq(true), Users.Karma.Gt(10)).
+		WhereCond(Users.DeletedAt.IsNull()).
+		OrderByCol(Users.Name).
+		Get(ctx))
+	eq(t, "typed where", len(typed), 2)
+	eq(t, "typed row values", typed[0]["name"], "Alice")
+	eq(t, "typed neq", must(orm.From("users").WhereCond(Users.Name.Ne("Alice")).Count(ctx)), int64(4))
+	eq(t, "typed order", must(orm.From("users").OrderByColDesc(Users.Karma).Limit(1).Pluck(ctx, "name"))[0], "Carol")
+	joined := must(orm.From("users").
+		SelectCols(Users.Email).
+		JoinTyped(Countries.Table, Users.CountryID, Countries.ID, orm.Eq).
+		WhereCond(Countries.Name.Eq("Norway")).
+		Count(ctx))
+	eq(t, "typed join", joined, int64(2))
+
 	eq(t, "first", must(orm.From("countries").OrderBy("id").First(ctx))["name"], "Denmark")
 	eq(t, "pluck", fmt.Sprint(must(orm.From("countries").OrderBy("id").Pluck(ctx, "name"))), "[Denmark Norway]")
 

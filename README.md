@@ -264,7 +264,7 @@ builder over a bare table, with rows as maps and no model machinery.
 
 ```go
 rows, err := orm.From("users").
-	Where("active", "=", true).
+	Where("active", orm.Eq, true).
 	WhereIn("country_id", 1, 2).
 	WhereNull("deleted_at").
 	WhereRaw("karma > ?", 10).
@@ -273,11 +273,23 @@ rows, err := orm.From("users").
 	Get(ctx) // []map[string]any
 
 id, err := orm.From("users").InsertGetID(ctx, map[string]any{"name": "Ada", "email": "a@x.io"})
-n, err := orm.From("users").Where("id", "=", id).Update(ctx, map[string]any{"name": "Ada L"})
+n, err := orm.From("users").Where("id", orm.Eq, id).Update(ctx, map[string]any{"name": "Ada L"})
 err = orm.From("users").UpdateOrInsert(ctx,
 	map[string]any{"email": "a@x.io"},
 	map[string]any{"name": "Ada L"})
 ```
+
+The operator is an `orm.Op` (`orm.Eq`, `orm.Neq`, `orm.Gt`, `orm.Gte`,
+`orm.Lt`, `orm.Lte`, `orm.Like`, `orm.NotLike`, `orm.Ilike`,
+`orm.NotIlike`) — typing `orm.` lists exactly the valid ones — and a plain
+string literal still converts, so `"="` keeps working.
+
+When a model does exist, its typed columns slot into the same builder:
+completion after `Users.` lists exactly the valid columns, the compared
+values are compile-checked, and the join qualifies both sides:
+`orm.From("users").JoinTyped(Countries.Table, Users.CountryID, Countries.ID, orm.Eq)`.
+The typed variants are `WhereCond`, `SelectCols`,
+`JoinTyped`, `LeftJoinTyped`, `OrderByCol` and `OrderByColDesc`.
 
 It also has `First`, `Pluck`, `Count`, `Exists`, `Join`, `LeftJoin`,
 `Distinct`, `Insert`, `InsertGetID`, `Update`, `UpdateOrInsert` and
@@ -433,7 +445,10 @@ To see the types without hovering, turn on gopls inlay hints:
 Completion after `Users.` lists every column with its type in the popup;
 `Users.Where(Users.` offers exactly the typed columns, and passing the
 wrong value type (`Users.Karma.Gt("ten")`) is a compile error, not a
-runtime one.
+runtime one. The same holds inside `orm.From` chains:
+`WhereCond(Users.Karma.Gt(10))` and `SelectCols(Users.Email)` take the
+same typed columns, and `Where("active", orm.Eq, true)` completes the
+valid operators after `orm.`.
 
 ## Eloquent feature map
 

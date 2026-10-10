@@ -55,26 +55,28 @@ var comparisonOps = map[string]bool{
 	"LIKE": true, "NOT LIKE": true, "ILIKE": true, "NOT ILIKE": true,
 }
 
-func (r RowQuery) cond(col, op string, v any) func(*SQL) {
-	if !comparisonOps[op] {
+func (r RowQuery) cond(col string, op Op, v any) func(*SQL) {
+	if !comparisonOps[string(op)] {
 		panic(fmt.Sprintf("orm: unknown comparison operator %q", op))
 	}
 	return func(b *SQL) {
 		b.Ident(col)
-		b.Write(" ", op, " ")
+		b.Write(" ", string(op), " ")
 		b.Arg(v)
 	}
 }
 
-// Where adds a simple column condition (where('active', '=', true)).
-func (r RowQuery) Where(col, op string, v any) RowQuery {
+// Where adds a simple column condition (where('active', '=', true)); the
+// operator is an orm.Op constant — Where("active", orm.Eq, true) — or a
+// string literal.
+func (r RowQuery) Where(col string, op Op, v any) RowQuery {
 	r.where = append(slices.Clip(r.where), r.cond(col, op, v))
-	r.nodes = append(slices.Clip(r.nodes), Field{Column: col, Op: op, Value: v})
+	r.nodes = append(slices.Clip(r.nodes), Field{Column: col, Op: string(op), Value: v})
 	return r
 }
 
 // OrWhere ORs the condition with everything so far.
-func (r RowQuery) OrWhere(col, op string, v any) RowQuery {
+func (r RowQuery) OrWhere(col string, op Op, v any) RowQuery {
 	if len(r.where) == 0 {
 		return r.Where(col, op, v)
 	}
@@ -94,8 +96,24 @@ func (r RowQuery) OrWhere(col, op string, v any) RowQuery {
 	// (accumulated ANDs) OR this condition, in the document-store form too.
 	r.nodes = []Node{Composite{Or: true, Parts: []Node{
 		Composite{Parts: r.nodes},
-		Field{Column: col, Op: op, Value: v},
+		Field{Column: col, Op: string(op), Value: v},
 	}}}
+	return r
+}
+
+// WhereCond adds typed conditions built from any model's columns, with
+// values compile-checked against the column type:
+// orm.From("users").WhereCond(Users.Karma.Gt(10), Users.Active.Eq(true)).
+// Mixing models in one call needs the same model; chain calls to mix.
+func (r RowQuery) WhereCond[M any](cs ...Cond[M]) RowQuery {
+	for _, c := range cs {
+		r.where = append(slices.Clip(r.where), c.f)
+		if c.ir != nil {
+			r.nodes = append(slices.Clip(r.nodes), c.ir)
+		} else {
+			r.badNode = true
+		}
+	}
 	return r
 }
 
@@ -166,15 +184,25 @@ func (r RowQuery) Select(cols ...string) RowQuery {
 	return r
 }
 
-func (r RowQuery) Distinct() RowQuery { r.distinct = true; return r }
-
-// Join adds a join on a column pair: Join("countries", "users.country_id", "=", "countries.id").
-func (r RowQuery) Join(table, first, op, second string) RowQuery {
-	return r.join("JOIN", table, first, op, second)
+// SelectCols selects typed columns, from any model — completion after
+// Users. lists exactly the valid columns.
+func (r RowQuery) SelectCols(cols ...ColumnRef) RowQuery {
+	names := make([]string, len(cols))
+	for i, c := range cols {
+		names[i] = c.Name()
+	}
+	return r.Select(names...)
 }
 
-func (r RowQuery) LeftJoin(table, first, op, second string) RowQuery {
-	return r.join("LEFT JOIN", table, first, op, second)
+func (r RowQuery) Distinct() RowQuery { r.distinct = true; return r }
+
+// Join adds a join on a column pair: Join("countries", "users.country_id", orm.Eq, "countries.id").
+func (r RowQuery) Join(table, first string, op Op, second string) RowQuery {
+	return r.join("JOIN", table, first, string(op), second)
+}
+
+func (r RowQuery) LeftJoin(table, first string, op Op, second string) RowQuery {
+	return r.join("LEFT JOIN", table, first, string(op), second)
 }
 
 func (r RowQuery) join(kind, table, first, op, second string) RowQuery {
@@ -192,6 +220,39 @@ func (r RowQuery) join(kind, table, first, op, second string) RowQuery {
 	return r
 }
 
+// QualifiedColumn is a column that renders table-qualified in SQL — every
+// orm.Column satisfies it — which is what a join's ON clause needs.
+type QualifiedColumn interface {
+	ColumnRef
+	AnyExpr
+}
+
+// JoinTyped joins a typed table through typed columns:
+// JoinTyped(Countries.Table, Users.CountryID, orm.Eq, Countries.ID).
+func (r RowQuery) JoinTyped[O any](t *Table[O], first, second QualifiedColumn, op Op) RowQuery {
+	return r.joinExpr("JOIN", t.Name, first, string(op), second)
+}
+
+// LeftJoinTyped is JoinTyped with a LEFT JOIN.
+func (r RowQuery) LeftJoinTyped[O any](t *Table[O], first, second QualifiedColumn, op Op) RowQuery {
+	return r.joinExpr("LEFT JOIN", t.Name, first, string(op), second)
+}
+
+func (r RowQuery) joinExpr(kind, table string, first AnyExpr, op string, second AnyExpr) RowQuery {
+	if !comparisonOps[op] {
+		panic(fmt.Sprintf("orm: unknown comparison operator %q", op))
+	}
+	r.joins = append(slices.Clip(r.joins), func(b *SQL) {
+		b.Write(" ", kind, " ")
+		b.Ident(table)
+		b.Write(" ON ")
+		first.build(b)
+		b.Write(" ", op, " ")
+		second.build(b)
+	})
+	return r
+}
+
 // OrderBy sorts ascending; OrderByDesc descending.
 func (r RowQuery) OrderBy(col string) RowQuery {
 	return r.order(col, " ASC")
@@ -200,6 +261,11 @@ func (r RowQuery) OrderBy(col string) RowQuery {
 func (r RowQuery) OrderByDesc(col string) RowQuery {
 	return r.order(col, " DESC")
 }
+
+// OrderByCol sorts by a typed column, ascending; OrderByColDesc descending.
+func (r RowQuery) OrderByCol(c ColumnRef) RowQuery { return r.order(c.Name(), " ASC") }
+
+func (r RowQuery) OrderByColDesc(c ColumnRef) RowQuery { return r.order(c.Name(), " DESC") }
 
 func (r RowQuery) order(col, dir string) RowQuery {
 	r.orders = append(slices.Clip(r.orders), func(b *SQL) { b.Ident(col); b.Write(dir) })

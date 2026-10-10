@@ -486,22 +486,37 @@ rows as maps and no model machinery.
 
 ```go
 rows, err := orm.From("users").
-	Where("active", "=", true).
+	Where("active", orm.Eq, true).
 	WhereIn("country_id", 1, 2).
 	WhereNull("deleted_at").
 	WhereRaw("karma > ?", 10).
-	LeftJoin("countries", "users.country_id", "=", "countries.id").
+	LeftJoin("countries", "users.country_id", orm.Eq, "countries.id").
 	OrderBy("name").
 	Limit(10).
 	Get(ctx) // []map[string]any
 
-n, err := orm.From("users").Where("email", "=", "a@b.c").Count(ctx)
+n, err := orm.From("users").Where("email", orm.Eq, "a@b.c").Count(ctx)
 id, err := orm.From("users").InsertGetID(ctx, map[string]any{"name": "Ada", "email": "ada@example.com"})
-n, err = orm.From("users").Where("id", "=", id).Update(ctx, map[string]any{"name": "Ada L"})
+n, err = orm.From("users").Where("id", orm.Eq, id).Update(ctx, map[string]any{"name": "Ada L"})
 n, err = orm.From("users").Where("id", "=", id).Delete(ctx)
 err = orm.From("users").UpdateOrInsert(ctx,
 	map[string]any{"email": "ada@example.com"},
 	map[string]any{"name": "Ada L"})
+```
+
+Operators are `orm.Op` constants (`orm.Eq`, `orm.Neq`, `orm.Gt`, `orm.Gte`,
+`orm.Lt`, `orm.Lte`, `orm.Like`, `orm.NotLike`, `orm.Ilike`, `orm.NotIlike`);
+string literals still convert. When a model exists, its typed columns carry
+over — completion lists the valid columns and the values are compile-checked:
+
+```go
+rows, err := orm.From("users").
+	SelectCols(Users.Email).
+	JoinTyped(Countries.Table, Users.CountryID, Countries.ID, orm.Eq).
+	WhereCond(Users.Active.Eq(true), Users.Karma.Gt(10)).
+	OrderByColDesc(Users.Karma).
+	Limit(10).
+	Get(ctx)
 ```
 
 ## Factories

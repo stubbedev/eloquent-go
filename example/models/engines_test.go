@@ -287,8 +287,10 @@ func TestMongo(t *testing.T) {
 	eq(t, "table count", must(orm.From("documents").On("mongo").Where("title", "=", "renamed").Count(ctx)), int64(1))
 	eq(t, "table orWhere", must(orm.From("documents").On("mongo").
 		Where("views", ">=", 10).OrWhere("title", "=", "renamed").Count(ctx)), int64(2))
-	eq(t, "table orWhere", must(orm.From("documents").On("mongo").
-		Where("views", ">=", 10).OrWhere("title", "=", "renamed").Count(ctx)), int64(2))
+	eq(t, "typed table where", must(orm.From("documents").On("mongo").
+		WhereCond(Docs.Views.Gt(1)).Count(ctx)), int64(3))
+	_, err = orm.From("documents").On("mongo").WhereCond(orm.Raw[Doc]("views > 1")).Count(ctx)
+	eq(t, "typed raw refused", orm.IsNotTranslatable(err), true)
 
 	eq(t, "delete", must(Docs.Query().On("mongo").Where(Docs.Title.Eq("renamed")).Delete(ctx)), int64(1))
 	eq(t, "deleted", must(Docs.Query().On("mongo").Count(ctx)), int64(2))

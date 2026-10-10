@@ -48,6 +48,30 @@ func (s Scalar[M, V]) Gte(v V) Cond[M] { return s.cmpArg(">=", v) }
 func (s Scalar[M, V]) Lt(v V) Cond[M]  { return s.cmpArg("<", v) }
 func (s Scalar[M, V]) Lte(v V) Cond[M] { return s.cmpArg("<=", v) }
 
+// Op is a comparison operator for the orm.From builder. The constants are
+// the valid values; untyped string literals ("=") convert to Op too, so
+// ad-hoc queries stay terse while the constants give completion something
+// to list. Anything else fails the existing runtime check.
+type Op string
+
+const (
+	Eq       Op = "="
+	Neq      Op = "<>"
+	Gt       Op = ">"
+	Gte      Op = ">="
+	Lt       Op = "<"
+	Lte      Op = "<="
+	Like     Op = "LIKE"
+	NotLike  Op = "NOT LIKE"
+	Ilike    Op = "ILIKE"
+	NotIlike Op = "NOT ILIKE"
+)
+
+// ColumnRef names a column regardless of its model or value type, letting
+// orm.From queries reference typed columns from any schema:
+// orm.From("users").SelectCols(Users.Email, Countries.Name).
+type ColumnRef interface{ Name() string }
+
 // Cmp compares against another expression of the same type — a column of
 // this or another model (whereColumn), or a scalar subquery.
 func (s Scalar[M, V]) Cmp(op string, other ValueExpr[V]) Cond[M] {
