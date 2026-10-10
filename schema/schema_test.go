@@ -95,6 +95,22 @@ func TestGrammarGolden(t *testing.T) {
 	_ = log
 	err := b.Create(ctx, "t", func(t *Blueprint) { t.Text("body").FullText() })
 	want(t, "sqlite full text unsupported", err != nil && strings.Contains(err.Error(), "full text"), true)
+
+	orm.AddConnection("golden-pg", nil, orm.Postgres)
+	pg, pgLog := On("golden-pg").Pretend()
+	check(t, pg.Create(ctx, "embeddings", func(t *Blueprint) {
+		t.ID()
+		t.Vector("embedding", 3)
+		t.HnswIndex("embedding", orm.Cosine)
+	}))
+	want(t, "hnsw ddl", pgLog(), []string{
+		`CREATE TABLE "embeddings" ("id" bigserial NOT NULL PRIMARY KEY, "embedding" vector(3) NOT NULL)`,
+		`CREATE INDEX "embeddings_embedding_hnsw" ON "embeddings" USING hnsw ("embedding" vector_cosine_ops)`,
+	})
+
+	sqlite, _ := On("golden-sqlite").Pretend()
+	err = sqlite.Create(ctx, "nope", func(t *Blueprint) { t.HnswIndex("v", orm.L2) })
+	want(t, "hnsw off postgres refuses", err != nil && strings.Contains(err.Error(), "pgvector"), true)
 }
 
 func TestLiveSchema(t *testing.T) {

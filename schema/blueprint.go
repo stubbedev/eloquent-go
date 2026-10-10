@@ -353,6 +353,10 @@ func (c *Column) Unique() *Column       { c.bp.Unique(c.Name); return c }
 func (c *Column) Index() *Column        { c.bp.Index(c.Name); return c }
 func (c *Column) FullText() *Column     { c.bp.FullText(c.Name); return c }
 func (c *Column) SpatialIndex() *Column { c.bp.SpatialIndex(c.Name); return c }
+func (c *Column) HnswIndex(metric orm.VectorMetric) *Column {
+	c.bp.HnswIndex(c.Name, metric)
+	return c
+}
 
 // Constrained adds a foreign key on the column. The table defaults to the
 // one guessed from the column name (user_id -> users) or the model given to
@@ -377,8 +381,20 @@ func (c *Column) Constrained(tableAndColumn ...string) *Foreign {
 type Index struct {
 	IndexName string
 	Columns   []string
-	Algo      string // btree, hash, gin, gist, ...
+	Algo      string // btree, hash, gin, gist, hnsw, ...
 	Lang      string // full text language (Postgres)
+	VectorOp  string // pgvector operator class (vector_cosine_ops, ...)
+}
+
+func vectorOpClass(m orm.VectorMetric) string {
+	switch m {
+	case orm.Cosine:
+		return "vector_cosine_ops"
+	case orm.InnerProduct:
+		return "vector_ip_ops"
+	default:
+		return "vector_l2_ops"
+	}
 }
 
 func (i *Index) Name(name string) *Index      { i.IndexName = name; return i }
@@ -390,6 +406,15 @@ func (b *Blueprint) Unique(cols ...string) *Index       { return b.index("unique
 func (b *Blueprint) Index(cols ...string) *Index        { return b.index("index", cols) }
 func (b *Blueprint) FullText(cols ...string) *Index     { return b.index("fullText", cols) }
 func (b *Blueprint) SpatialIndex(cols ...string) *Index { return b.index("spatial", cols) }
+
+// HnswIndex builds a pgvector HNSW index over one vector column, making
+// Nearest ordering an index-backed search instead of a sequential scan.
+func (b *Blueprint) HnswIndex(column string, metric orm.VectorMetric) *Index {
+	idx := b.index("hnsw", []string{column})
+	idx.Algo = "hnsw"
+	idx.VectorOp = vectorOpClass(metric)
+	return idx
+}
 
 func (b *Blueprint) index(kind string, cols []string) *Index {
 	idx := &Index{IndexName: indexName(b.table, kindSuffix(kind), cols), Columns: cols}

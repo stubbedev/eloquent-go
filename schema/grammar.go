@@ -344,7 +344,7 @@ func (g grammar) compileCreate(bp *Blueprint) ([]string, error) {
 			}
 		case "foreign":
 			defs = append(defs, g.foreign(cmd.foreign))
-		case "unique", "index", "fullText", "spatial":
+		case "unique", "index", "fullText", "spatial", "hnsw":
 			s, err := g.createIndex(bp.table, cmd)
 			if err != nil {
 				return nil, err
@@ -457,7 +457,7 @@ func (g grammar) compileAlter(bp *Blueprint) ([]string, error) {
 	}
 	for _, cmd := range bp.commands {
 		switch cmd.kind {
-		case "unique", "index", "fullText", "spatial":
+		case "unique", "index", "fullText", "spatial", "hnsw":
 			s, err := g.createIndex(bp.table, cmd)
 			if err != nil {
 				return nil, err
@@ -572,6 +572,15 @@ func (g grammar) createIndex(table string, cmd *command) (string, error) {
 			return "CREATE INDEX " + name + on + " USING gist" + cols, nil
 		}
 		return "", fmt.Errorf("schema: spatial indexes are not supported on %s", g.kind)
+	case "hnsw":
+		if g.kind != "postgres" {
+			return "", fmt.Errorf("schema: hnsw vector indexes need pgvector (not %s)", g.kind)
+		}
+		op := "vector_l2_ops"
+		if idx.VectorOp != "" {
+			op = idx.VectorOp
+		}
+		return "CREATE INDEX " + name + on + " USING hnsw (" + g.quote(cmd.columns[0]) + " " + op + ")", nil
 	}
 	unique := map[bool]string{true: "UNIQUE ", false: ""}[cmd.kind == "unique"]
 	s := "CREATE " + unique + "INDEX " + name + on

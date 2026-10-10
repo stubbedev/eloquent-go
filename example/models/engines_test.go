@@ -394,7 +394,10 @@ func TestPgVector(t *testing.T) {
 		t.String("title")
 		t.BigInteger("views").Default(0)
 		t.Vector("vec", 3)
+		t.HnswIndex("vec", orm.Cosine)
 	}))
+	likeHnsw := must(orm.From("pg_indexes").Where("tablename", "=", "documents").Where("indexdef", "LIKE", "%hnsw%vector_cosine_ops%").Count(ctx))
+	eq(t, "hnsw index", likeHnsw, int64(1))
 
 	for _, d := range []Doc{
 		{Title: "near", Vec: orm.NewVector[orm.D3](1, 0, 0)},
